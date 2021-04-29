@@ -1,0 +1,65 @@
+version: '3'
+
+networks:
+    app-tier:
+        driver: bridge
+
+services: 
+    zookeeper-server:
+        image: 'bitnami/zookeeper:latest'
+        networks:
+            - app-tier
+        ports:
+            - '2181:2181'
+            - '2888:2888'
+            - '3888:3888'
+        environment:
+            - ALLOW_ANONYMOUS_LOGIN=yes
+            - ZOO_PORT_NUMBER=2181
+            - ZOO_SERVER_ID=1
+
+    zookeeper-client:
+        image: 'bitnami/zookeeper:latest'
+        networks:
+            - app-tier
+        depends_on:
+            - zookeeper-server
+        entrypoint: ["zkCli.sh", "-server", "zookeeper-server:2181", "create",  "/zk"]
+
+    erlang.k8s.node-1:
+        image: 'contactchanaka/erlang.incremental.rebalance:0.0.1'
+        build: .
+        networks:
+            - app-tier
+        depends_on:
+            - zookeeper-server
+            - zookeeper-client
+        environment:
+           - ERLANG_NODENAME='erlang_k8s@erlang.k8s.node-1'
+           - CLUSTER_ERLANG_COOKIE='erlang.k8s.cluster'
+           - K8S_HEADLESS_SVC=[]
+           - WORLD_LIST=['erlang.k8s.node-1', 'erlang.k8s.node-2']
+
+           - ZK_CHROOT="/zk"
+           - ZK_HOST="zookeeper-server"
+           - ZK_ZNODE="links"
+           - RESOURCE_LIST=[link1, link2, link3, link4, link5, link6, link7]
+
+    erlang.k8s.node-2:
+        image: 'contactchanaka/erlang.incremental.rebalance:0.0.1'
+        networks:
+            - app-tier
+        depends_on:
+            - zookeeper-server
+            - zookeeper-client
+        environment:
+           - ERLANG_NODENAME='erlang_k8s@erlang.k8s.node-2'
+           - CLUSTER_ERLANG_COOKIE='erlang.k8s.cluster'
+           - K8S_HEADLESS_SVC=[]
+           - WORLD_LIST=['erlang.k8s.node-1', 'erlang.k8s.node-2']
+
+           - ZK_CHROOT="/zk"
+           - ZK_HOST="zookeeper-server"
+           - ZK_ZNODE="links"
+           - RESOURCE_LIST=[link1, link2, link3, link4, link5, link6, link7]
+#        entrypoint: ["sleep", "3600"]

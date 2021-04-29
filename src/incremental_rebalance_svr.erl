@@ -51,9 +51,9 @@ init([SvrName, Chroot]) ->
 	process_flag(trap_exit, true),
 	erlzk:start(),
 	ZkHost = application:get_env(incremental_rebalance, 'zk.host',"127.0.0.1"),
-	DccLinks = application:get_env(incremental_rebalance, 'resource.list',["resource-1", "resource-2", "resource-3", "resource-4", "resource-5"]),
+	DccLinks = application:get_env(incremental_rebalance, 'resource.list',[]),
 	InitTimeout = application:get_env(incremental_rebalance, 'initial.timout.ms' ,5000),
-	io:fwrite("Starting : ~p ~n",[SvrName]),
+	error_logger:info_msg("Starting : ~p ~n", [SvrName]),
 	{ok, #state{svr_name = SvrName, zk_chroot = Chroot,zk_host = ZkHost, resource_list = DccLinks}, InitTimeout}.											
 	
 
@@ -93,7 +93,7 @@ handle_cast(_Request, State) ->
 %%
 
 handle_info(timeout, #state{zk_chroot = Chroot,zk_host = ZkHost} = State) ->
-	ZnodeName = application:get_env(incremental_rebalance, 'zk.znode',"dcc"),
+	ZnodeName = application:get_env(incremental_rebalance, 'zk.znode',"resource"),
 	{ok, Pid} = erlzk:connect([{ZkHost, 2181}], 30000),
 	{ok, Znode} = erlzk:create(Pid, Chroot ++ "/" ++ ZnodeName, term_to_binary([]), ephemeral_sequential),
 	{ok, _} = erlzk:exists(Pid, Znode, self()),
@@ -106,38 +106,39 @@ handle_info(timeout, #state{zk_chroot = Chroot,zk_host = ZkHost} = State) ->
 	{noreply, NewState};
 	
 handle_info({node_deleted,Znode}, #state{svr_name = SvrName,zk_znode = Znode, zk_znode_suffix = ZnodeSuffix} = State) ->
-	io:fwrite("handle_info node_deleted : ~p|~p : {node_deleted,Znode} : ~p ~n",[SvrName, Znode, {node_deleted,Znode}]),
+	error_logger:info_msg("node_deleted : ~p|~p : {node_deleted,Znode} : ~p ~n", [SvrName, Znode, {node_deleted,Znode}]),
 	pg2:leave(ZnodeSuffix, self()),
 	{noreply, State, 0};
 
 handle_info({node_children_changed, ChrootBin}, #state{svr_name = SvrName,zk_connection = Pid,zk_znode = Znode,zk_chroot = Chroot, role = ?LEADER} = State) ->
-	io:fwrite("handle_info node_children_changed : ~p|~p : ({node_children_changed, Chroot}  : ~p ~n",[SvrName, Znode, {node_children_changed, ChrootBin}]),
+	error_logger:info_msg("node_children_changed : ~p|~p : ({node_children_changed, Chroot}  : ~p ~n", [SvrName, Znode, {node_children_changed, ChrootBin}]),
 	{ok, Children} = erlzk:get_children(Pid, Chroot),
 	NewState = leader_election(State#state{zk_chroot_children = lists:sort(Children)}),
 	{noreply,NewState};
+
 handle_info({node_data_changed, Znode}, #state{svr_name = SvrName,zk_chroot = Chroot, zk_znode = Znode, zk_chroot_children = ChildZNodes,zk_connection = Pid, zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = PData, role = ?LEADER} = State) ->
 	{ok, {Data, _}} = erlzk:get_data(Pid, Znode),
 	NData = binary_to_term(Data),
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
-			io:fwrite("[~p|~p] [~p] LEADER Revoke called : Revoke links : ~p~n",[?MODULE, ?LINE, SvrName, RvkLinks]),
+			error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [SvrName, RvkLinks]),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
-				io:fwrite("[~p|~p] [~p] LEADER Assign called : Assign links : ~p~n",[?MODULE, ?LINE, SvrName, AsgLinks]);
+				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [SvrName, AsgLinks]);
 			true ->
-				io:fwrite("[~p|~p] [~p] LEADER No change links~n",[?MODULE, ?LINE, SvrName])
+				error_logger:info_msg("[~p] LEADER No change resources~n", [SvrName])
 			end
 	end,
-	io:fwrite("[~p|~p] [~p] LEADER links : ~p~n",[?MODULE, ?LINE, SvrName, NData]),
+	error_logger:info_msg("[~p] LEADER RESOURCES : ~p~n", [SvrName, NData]),
 	erlzk:get_data(Pid, Znode, self()),
 	{ok, Children0} = erlzk:get_children(Pid, Chroot, self()),
 	case lists:sort(Children0) of
 		ChildZNodes ->
 			NewState = State#state{local_resource_list = binary_to_term(Data)};
 		Children ->
-			io:fwrite("[~p|~p] [~p] LEADER leader_election : ~p ~n",[?MODULE, ?LINE, SvrName, Children]),
+			error_logger:info_msg("[~p] LEADER leader_election : ~p~n", [SvrName, Children]),
 			NewState = leader_election(State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = binary_to_term(Data), zk_chroot_children = Children})
 	end,
 	{noreply, NewState};
@@ -147,17 +148,17 @@ handle_info({node_data_changed, Znode} = _Info, #state{svr_name = SvrName,zk_chr
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
-			io:fwrite("[~p|~p] [~p] LEADER Revoke called : Revoke links : ~p~n",[?MODULE, ?LINE, SvrName, RvkLinks]),
+			error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [SvrName, RvkLinks]),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
-				io:fwrite("[~p|~p] [~p] LEADER Assign called : Assign links : ~p~n",[?MODULE, ?LINE, SvrName, AsgLinks]);
+				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [SvrName, AsgLinks]);
 			true ->
-				io:fwrite("[~p|~p] [~p] LEADER No change links~n",[?MODULE, ?LINE, SvrName])
+				error_logger:info_msg("[~p] LEADER No change resources~n",[SvrName])
 			end
 	end,
 	erlzk:get_data(Pid, Znode, self()),
-	io:fwrite("[~p|~p] [~p] LEADER links : ~p~n",[?MODULE, ?LINE, SvrName, NData]),
+	error_logger:info_msg("[~p] LEADER RESOURCES : ~p~n",[SvrName, NData]),
 	NewRvkCandidates = lists:keydelete(ZnodeSuffix, 1, RvkCandidates),
 	if 
 		NewRvkCandidates == [] ->
@@ -172,7 +173,7 @@ handle_info({node_data_changed, Znode} = _Info, #state{svr_name = SvrName,zk_chr
 						ChildZNodes ->
 							NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = NData};
 						Children ->
-							io:fwrite("[~p|~p] [~p] LEADER leader_election : ~p ~n",[?MODULE, ?LINE, SvrName, Children]),
+							error_logger:info_msg("[~p] LEADER leader_election  : ~p ~n", [SvrName, Children]),
 							NewState = leader_election(State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = NData, zk_chroot_children = Children})
 					end
 			end;
@@ -196,7 +197,7 @@ handle_info({node_data_changed, FZnode} = _Info, #state{svr_name = SvrName,zk_ch
 						ChildZNodes ->
 							NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = []};
 						Children ->
-							io:fwrite("[~p|~p] [~p] LEADER leader_election  : ~p ~n",[?MODULE, ?LINE, SvrName, Children]),
+							error_logger:info_msg("[~p] LEADER leader_election  : ~p ~n", [SvrName, Children]),
 							NewState = leader_election(State#state{zk_revoke_candidates = [], zk_assign_candidates = [], zk_chroot_children = Children})
 					end
 			end;
@@ -206,7 +207,7 @@ handle_info({node_data_changed, FZnode} = _Info, #state{svr_name = SvrName,zk_ch
 	{noreply, NewState};
 	
 handle_info({node_deleted,AdjLeader}, #state{svr_name = SvrName,zk_connection = Pid,zk_chroot = Chroot, zk_znode = Znode, zk_adj_leader = AdjLeader, role = ?FOLLOWER} = State) ->
-	io:fwrite("handle_info  node_deleted : ~p|~p : {node_deleted,AdjLeader} : ~p ~n",[SvrName, Znode, {node_deleted,AdjLeader}]),
+	error_logger:info_msg("node_deleted : ~p|~p : {node_deleted,AdjLeader} : ~p ~n", [SvrName, Znode, {node_deleted,AdjLeader}]),
 	{ok, Children} = erlzk:get_children(Pid, Chroot),
 	NewState = leader_election(State#state{zk_chroot_children = lists:sort(Children)}),
 	{noreply, NewState};
@@ -216,16 +217,16 @@ handle_info({node_data_changed, Znode}, #state{svr_name = SvrName,zk_znode = Zno
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
-			io:fwrite("[~p|~p] [~p] FOLLOWER Revoke called : Revoke links : ~p~n",[?MODULE, ?LINE, SvrName, RvkLinks]),
+			error_logger:info_msg("[~p] FOLLOWER Revoke called : Revoke resources : ~p~n", [SvrName,RvkLinks]),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
-				io:fwrite("[~p|~p] [~p] FOLLOWER Assign called : Assign links : ~p~n",[?MODULE, ?LINE, SvrName, AsgLinks]);
+				error_logger:info_msg("[~p] FOLLOWER Assign called : Assign resources : ~p~n", [SvrName,AsgLinks]);
 			true ->
-				io:fwrite("[~p|~p] [~p] FOLLOWER No change links~n",[?MODULE, ?LINE, SvrName])
+				error_logger:info_msg("[~p] FOLLOWER No change resources~n", [SvrName])
 			end
 	end,
-	io:fwrite("[~p|~p] [~p] FOLLOWER links : ~p~n",[?MODULE, ?LINE, SvrName, NData]),
+	error_logger:info_msg("[~p] FOLLOWER RESOURCES : ~p~n", [SvrName, NData]),
 	erlzk:get_data(Pid, Znode, self()),
 	{noreply, State#state{local_resource_list = binary_to_term(Data)}};
 handle_info({node_data_changed, AdjLeader}, #state{zk_adj_leader = AdjLeader, zk_connection = Pid, role = ?FOLLOWER} = State) ->
@@ -234,7 +235,7 @@ handle_info({node_data_changed, AdjLeader}, #state{zk_adj_leader = AdjLeader, zk
 
 
 handle_info(Info, #state{svr_name = SvrName,zk_znode = Znode, zk_connection = Pid} = State) ->
-	io:fwrite("UNKNOWN handle_info : ~p|~p : Info : ~p ~n",[SvrName, Znode, Info]),
+	error_logger:warning_msg("UNKNOWN msg received : ~p|~p : Info : ~p~n", [SvrName, Znode, Info]),
 	erlzk:exists(Pid, Znode, self()),
 	{noreply, State}.
 
@@ -248,7 +249,7 @@ handle_info(Info, #state{svr_name = SvrName,zk_znode = Znode, zk_connection = Pi
 terminate(_Reason, #state{svr_name = SvrName, zk_connection = Pid, zk_znode = Znode, zk_znode_suffix = ZnodeSuffix}=State) ->
 	erlzk:delete(Pid, Znode),
 	pg2:leave(ZnodeSuffix, self()),
-	io:fwrite("Terminating : ~p | State : ~p~n",[SvrName, State]),
+	error_logger:warning_msg("Terminating : ~p | State : ~p~n", [SvrName, State]),
 	ok.
 
 -spec code_change(OldVsn :: term() | {down, term()}, State :: #state{},
@@ -268,7 +269,7 @@ leader_election(#state{zk_znode_suffix = ZnodeSuffix} = State) ->
 	monitor_adjacent_leader(State#state.zk_chroot_children, ZnodeSuffix, State).
 
 monitor_adjacent_leader([ZnodeSuffix|_], ZnodeSuffix, State)->
-	io:fwrite("[~p|~p] Leader :[~p] ~n", [?MODULE, ?LINE, State#state.svr_name]),
+	error_logger:info_msg("LEADER : ~p~n", [State#state.svr_name]),
 	ZNodes = State#state.zk_chroot_children,
 	PrevLinks = [{Znode0, binary_to_term(Data)}|| {Znode0, {ok, {Data, _}}} <- [{Znode0, erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode0)} || Znode0 <- ZNodes]],
 	NewLinks = rebalance0(ZNodes, State#state.resource_list, PrevLinks),
@@ -294,22 +295,20 @@ monitor_adjacent_leader([ZnodeSuffix|_], ZnodeSuffix, State)->
 					{ok,  Children0} = erlzk:get_children(State#state.zk_connection, State#state.zk_chroot, self()),
 					case lists:sort(Children0) of
 						ZNodes ->
-							io:fwrite("[~p|~p] New ZNodes: ~p~n",[?MODULE, ?LINE, ZNodes]),
+							error_logger:info_msg("New ZNodes : ~p~n", [ZNodes]),
 							erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
 							State#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = [], zk_assign_candidates = []};
 						Children ->
-							io:fwrite("[~p|~p] leader_election ZNodes: ~p~n",[?MODULE, ?LINE, ZNodes]),
-							io:fwrite("[~p|~p] leader_election New Children: ~p~n",[?MODULE, ?LINE, Children]),
+							error_logger:info_msg("leader_election ZNodes: ~p :~n New Children: ~p~n", [ZNodes, Children]),
 							leader_election(State#state{zk_chroot_children = Children})
 					end
 			end;
 		true ->
-			%%io:fwrite("[~p|~p] {ZnodeSuffix, RvkCandidates} : ~p~n",[?MODULE, ?LINE, {ZnodeSuffix, RvkCandidates}]),
 			erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
 			State#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = RvkCandidates, zk_assign_candidates = AsgCandidates}
 	end;
 monitor_adjacent_leader([AdjLeaderSuffix, ZnodeSuffix|_], ZnodeSuffix, State)->
-	io:fwrite("[~p|~p] Follwer :[~p] ~n", [?MODULE, ?LINE, State#state.svr_name]),
+	error_logger:info_msg("Follwer :[~p] ~n", [State#state.svr_name]),
 	FQZnodeName = State#state.zk_chroot ++ "/" ++ AdjLeaderSuffix,
 	erlzk:exists(State#state.zk_connection, FQZnodeName, self()),
 	State#state{zk_adj_leader = list_to_binary(FQZnodeName), role = ?FOLLOWER, zk_chroot_children = [], zk_revoke_candidates = [], zk_assign_candidates = []};
