@@ -51,6 +51,6 @@ kubectl apply -f erlang-k8s-incremental-rebalance.yaml
 Clear out
 ```
 kubectl delete -f erlang-k8s-incremental-rebalance.yaml
-kubectl apply -f k8s.io.zookeeper.yaml
+kubectl delete -f k8s.io.zookeeper.yaml
 
 ```
