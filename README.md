@@ -25,7 +25,7 @@ docker-compose build
 
 In order to run this application, Zookeeper service is a pre-equisite.
 And also Znode (eg: /zk) need to be created which will be used as chroot for application specific ephemeral znodes.
-Docker-compose and k8s manifest will create above pre-requisites before starting of incremental rebalance erlang application
+Docker-compose and k8s manifest will create above pre-requisites before starting of incremental rebalance erlang application.
 
 ### Docker compose
 ```
