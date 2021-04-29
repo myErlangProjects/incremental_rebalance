@@ -41,9 +41,19 @@ spec:
         app: erlang # has to match .spec.selector.matchLabels
     spec:
       terminationGracePeriodSeconds: 5
+      initContainers:
+      - name: create-chroot
+        image: 'k8s.gcr.io/kubernetes-zookeeper:1.0-3.4.10'
+        command:
+        - zkCli.sh
+        - "-server"
+        - "zk-cs.default.svc.cluster.local:2181"
+        - "create"
+        - "/zk"
+        - "my.chroot"
       containers:
       - name: erlang-k8s-node
-        image: 'contactchanaka/erlang.k8s.cluster:0.0.1'
+        image: 'contactchanaka/erlang.incremental.rebalance:0.0.1'
         imagePullPolicy: Always # can be set to IfNotPresent
         ports:
         - containerPort: 4369
@@ -69,4 +79,12 @@ spec:
               key: ERLANG_COOKIE
         - name: WORLD_LIST
           value: "[]"
+        - name: ZK_CHROOT
+          value: '"/zk"'
+        - name: ZK_HOST
+          value: '"zk-cs.default.svc.cluster.local"'
+        - name: ZK_ZNODE
+          value: '"links"'
+        - name: RESOURCE_LIST
+          value: '["link1", "link2", "link3", "link4", "link5", "link6", "link7"]'
       restartPolicy: Always
