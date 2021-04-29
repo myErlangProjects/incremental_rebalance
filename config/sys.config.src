@@ -1,0 +1,15 @@
+[
+  {erlang_k8s_cluster, 
+  [{'k8s.svc.path', ${K8S_HEADLESS_SVC}},
+   {'world.list.verbosity', verbose},
+   {'world.list.interval.ms', 5000},
+   {'dns.wait.ms', 5000},
+   {'world.list', ${WORLD_LIST}},
+  {incremental_rebalance, 
+  [{'zk.chroot', ${ZK_CHROOT}},
+   {'zk.host', ${ZK_HOST}},
+   {'zk.znode', ${ZK_ZNODE}},
+   {'resource.list', ["resource-1", "resource-2", "resource-3", "resource-4", "resource-5"]},
+   {'initial.timout.ms', 5000},
+]}
+].

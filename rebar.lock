@@ -1,0 +1,8 @@
+[{<<"erlang_k8s_cluster">>,
+  {git,"https://github.com/myErlangProjects/erlang_k8s_cluster.git",
+       {ref,"80cfa198dad1cdf88e8215e11627faa43b8aa6c7"}},
+  0},
+ {<<"rebar">>,
+  {git,"https://github.com/myErlangProjects/erlang_k8s_cluster.git",
+       {ref,"80cfa198dad1cdf88e8215e11627faa43b8aa6c7"}},
+  0}].
