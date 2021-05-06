@@ -4,6 +4,7 @@
 %%%-------------------------------------------------------------------
 
 -module(incremental_rebalance_sup).
+-author('Chanaka Fernando <contactchanaka@gmail.com>').
 
 -behaviour(supervisor).
 

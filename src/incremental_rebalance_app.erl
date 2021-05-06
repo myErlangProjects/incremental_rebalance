@@ -4,6 +4,7 @@
 %%%-------------------------------------------------------------------
 
 -module(incremental_rebalance_app).
+-author('Chanaka Fernando <contactchanaka@gmail.com>').
 
 -behaviour(application).
 

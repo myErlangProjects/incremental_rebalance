@@ -1,12 +1,12 @@
-%%% incremental_rebalance_svr.erl
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%  @author Channaka Fernando <chanaka@globalwavenet.com>
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%-------------------------------------------------------------------
+%% @doc incremental_rebalance worker.
+%% @end
+%%%-------------------------------------------------------------------
+
 -module(incremental_rebalance_svr).
--author('Chanaka Fernando <chanaka@globalwavenet.com>').
+-author('Chanaka Fernando <contactchanaka@gmail.com>').
 
 -behaviour(gen_server).
-
 
 %% export the incremental_rebalance_svr API
 
@@ -52,9 +52,10 @@ init([SvrName, Chroot]) ->
 	erlzk:start(),
 	ZkHost = application:get_env(incremental_rebalance, 'zk.host',"127.0.0.1"),
 	DccLinks = application:get_env(incremental_rebalance, 'resource.list',[]),
-	InitTimeout = application:get_env(incremental_rebalance, 'initial.timout.ms' ,5000),
+	{ok, Pid} = erlzk:connect([{ZkHost, 2181}], 30000,[{monitor, self()}]),
+	link(Pid),
 	error_logger:info_msg("Starting : ~p ~n", [SvrName]),
-	{ok, #state{svr_name = SvrName, zk_chroot = Chroot,zk_host = ZkHost, resource_list = DccLinks}, InitTimeout}.											
+	{ok, #state{svr_name = SvrName, zk_connection = Pid, zk_chroot = Chroot, zk_host = ZkHost, resource_list = DccLinks}}.											
 	
 
 -spec handle_call(Request :: term(), From :: {pid(), Tag :: any()},
@@ -75,6 +76,9 @@ init([SvrName, Chroot]) ->
 handle_call(_Request, _From, State) ->
 	{noreply, State}.
 
+handle_cast({stop_creset_zk_conn}, #state{zk_connection = Pid} = State) ->
+	exit(Pid, kill),
+	{noreply, State};
 	
 handle_cast(stop, State) ->
 	{stop, normal, State};
@@ -91,23 +95,34 @@ handle_cast(_Request, State) ->
 %% @see //stdlib/gen_server:handle_info/2
 %% @private
 %%
+handle_info({disconnected, Host, Port}, #state{svr_name = SvrName} = State) ->
+	error_logger:info_msg("ZK session disconnected : ~p|~p : Info : ~p~n", [SvrName, Host, Port]),
+	{noreply, State};
+handle_info({expired, Host, Port}, #state{svr_name = SvrName} = State) ->
+	error_logger:info_msg("ZK session expired : ~p|~p : Info : ~p~n", [SvrName, Host, Port]),
+	{noreply, State};
+handle_info({connected, Host, Port}, #state{svr_name = SvrName, zk_znode = undefined} = State) ->
+		error_logger:info_msg("ZK session connected : ~p|~p : Info : ~p~n", [SvrName, Host, Port]),
+		{noreply, State, 0};
+handle_info({connected, Host, Port}, #state{svr_name = SvrName, zk_connection = Pid, zk_znode = Znode} = State) ->
+	error_logger:info_msg("ZK session connected : ~p|~p : Info : ~p~n", [SvrName, Host, Port]),
+	erlzk:delete(Pid, Znode),
+	{noreply, State, 0};
 
-handle_info(timeout, #state{zk_chroot = Chroot,zk_host = ZkHost} = State) ->
+handle_info(timeout, #state{zk_connection = Pid, zk_chroot = Chroot} = State) ->
 	ZnodeName = application:get_env(incremental_rebalance, 'zk.znode',"resource"),
-	{ok, Pid} = erlzk:connect([{ZkHost, 2181}], 30000),
+	erlzk:create(Pid, Chroot, persistent),
 	{ok, Znode} = erlzk:create(Pid, Chroot ++ "/" ++ ZnodeName, term_to_binary([]), ephemeral_sequential),
 	{ok, _} = erlzk:exists(Pid, Znode, self()),
 	[_, ZnodeSuffix] = string:tokens(Znode, "/"),
-	pg2:create(ZnodeSuffix),
-	pg2:join(ZnodeSuffix,self()),
 	{ok, Children} = erlzk:get_children(Pid, Chroot),
+	error_logger:info_msg("Create ephemeral_sequential : ZnodeSuffix : ~p , Children : ~p~n", [Children, ZnodeSuffix]),
 	NewState = leader_election(State#state{zk_connection = Pid, zk_znode = list_to_binary(Znode), zk_znode_suffix = ZnodeSuffix, 
 	zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = [], zk_chroot_children = lists:sort(Children)}),
 	{noreply, NewState};
 	
-handle_info({node_deleted,Znode}, #state{svr_name = SvrName,zk_znode = Znode, zk_znode_suffix = ZnodeSuffix} = State) ->
+handle_info({node_deleted,Znode}, #state{svr_name = SvrName,zk_znode = Znode} = State) ->
 	error_logger:info_msg("node_deleted : ~p|~p : {node_deleted,Znode} : ~p ~n", [SvrName, Znode, {node_deleted,Znode}]),
-	pg2:leave(ZnodeSuffix, self()),
 	{noreply, State, 0};
 
 handle_info({node_children_changed, ChrootBin}, #state{svr_name = SvrName,zk_connection = Pid,zk_znode = Znode,zk_chroot = Chroot, role = ?LEADER} = State) ->
@@ -233,7 +248,11 @@ handle_info({node_data_changed, AdjLeader}, #state{zk_adj_leader = AdjLeader, zk
 	erlzk:exists(Pid, AdjLeader, self()),
 	{noreply, State};
 
-
+handle_info({'EXIT', OldPid, Reason}, #state{svr_name = SvrName,zk_host = ZkHost, zk_znode = Znode} = State) when is_pid(OldPid) ->
+	error_logger:error_msg("ZK Conn proc down: ~p|~p : Info : ~p~n", [SvrName, Znode, {'EXIT', OldPid, Reason}]),
+	{ok, Pid} = erlzk:connect([{ZkHost, 2181}], 30000,[{monitor, self()}]),
+	link(Pid),
+	{noreply, State#state{zk_connection = Pid}};
 handle_info(Info, #state{svr_name = SvrName,zk_znode = Znode, zk_connection = Pid} = State) ->
 	error_logger:warning_msg("UNKNOWN msg received : ~p|~p : Info : ~p~n", [SvrName, Znode, Info]),
 	erlzk:exists(Pid, Znode, self()),
@@ -246,9 +265,9 @@ handle_info(Info, #state{svr_name = SvrName,zk_znode = Znode, zk_connection = Pi
 %% @see //stdlib/gen_server:terminate/3
 %% @private
 %%
-terminate(_Reason, #state{svr_name = SvrName, zk_connection = Pid, zk_znode = Znode, zk_znode_suffix = ZnodeSuffix}=State) ->
+terminate(_Reason, #state{svr_name = SvrName, zk_connection = Pid, zk_znode = Znode}=State) ->
 	erlzk:delete(Pid, Znode),
-	pg2:leave(ZnodeSuffix, self()),
+	erlzk:close(Pid),
 	error_logger:warning_msg("Terminating : ~p | State : ~p~n", [SvrName, State]),
 	ok.
 
@@ -266,22 +285,27 @@ code_change(_OldVsn, State, _Extra) ->
 %%  internal functions
 %%----------------------------------------------------------------------
 leader_election(#state{zk_znode_suffix = ZnodeSuffix} = State) ->
-	monitor_adjacent_leader(State#state.zk_chroot_children, ZnodeSuffix, State).
+	leader_election(State#state.zk_chroot_children, ZnodeSuffix, State).
 
-monitor_adjacent_leader([ZnodeSuffix|_], ZnodeSuffix, State)->
+leader_election([ZnodeSuffix|_], ZnodeSuffix, State)->
 	error_logger:info_msg("LEADER : ~p~n", [State#state.svr_name]),
+	proceed_to_rebalance(ZnodeSuffix, State);
+leader_election([AdjLeaderSuffix, ZnodeSuffix|_], ZnodeSuffix, State)->
+	error_logger:info_msg("Follwer :[~p] ~n", [State#state.svr_name]),
+	monitor_adjacent_leader(AdjLeaderSuffix, State);
+leader_election([_|AdjLeaderL], ZnodeSuffix, State)->
+	leader_election(AdjLeaderL, ZnodeSuffix, State).
+	
+
+proceed_to_rebalance(ZnodeSuffix, State)->
 	ZNodes = State#state.zk_chroot_children,
-	PrevLinks = [{Znode0, binary_to_term(Data)}|| {Znode0, {ok, {Data, _}}} <- [{Znode0, erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode0)} || Znode0 <- ZNodes]],
-	NewLinks = rebalance0(ZNodes, State#state.resource_list, PrevLinks),
+	PrevLinks = [{Znode0, binary_to_term(Data)}|| {Znode0, {ok, {Data, _}}} 
+	              <- [{Znode0, erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode0)} 
+				    || Znode0 <- ZNodes]],
+	NewLinks = rebalance(ZNodes, State#state.resource_list, PrevLinks),
 	RvkCandidates = revoke_candidates(lists:keysort(1,NewLinks), lists:keysort(1,PrevLinks), []),
 	AsgCandidates = assign_candidates(lists:keysort(1,NewLinks), lists:keysort(1,PrevLinks), []),
 	%%io:fwrite("NewLinks : ~p~n PrevLinks : ~p~n RvkCandidates : ~p~n AsgCandidates : ~p~n",[NewLinks, PrevLinks, RvkCandidates, AsgCandidates]),
-	[
-	begin
-		erlzk:set_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode1, term_to_binary(Links), -1),
-		erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode1, self())
-	end
-	|| {Znode1, Links} <- RvkCandidates],
 	if 
 		RvkCandidates == [] ->
 			[erlzk:set_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode1, term_to_binary(Links), -1)
@@ -294,7 +318,7 @@ monitor_adjacent_leader([ZnodeSuffix|_], ZnodeSuffix, State)->
 				_ ->
 					{ok,  Children0} = erlzk:get_children(State#state.zk_connection, State#state.zk_chroot, self()),
 					case lists:sort(Children0) of
-						ZNodes ->
+						ZNodes -> %% no change
 							error_logger:info_msg("New ZNodes : ~p~n", [ZNodes]),
 							erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
 							State#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = [], zk_assign_candidates = []};
@@ -304,61 +328,61 @@ monitor_adjacent_leader([ZnodeSuffix|_], ZnodeSuffix, State)->
 					end
 			end;
 		true ->
+			[
+				begin
+					erlzk:set_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode1, term_to_binary(Links), -1),
+					erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode1, self())
+				end
+			|| {Znode1, Links} <- RvkCandidates],
 			erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
 			State#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = RvkCandidates, zk_assign_candidates = AsgCandidates}
-	end;
-monitor_adjacent_leader([AdjLeaderSuffix, ZnodeSuffix|_], ZnodeSuffix, State)->
-	error_logger:info_msg("Follwer :[~p] ~n", [State#state.svr_name]),
-	FQZnodeName = State#state.zk_chroot ++ "/" ++ AdjLeaderSuffix,
-	erlzk:exists(State#state.zk_connection, FQZnodeName, self()),
-	State#state{zk_adj_leader = list_to_binary(FQZnodeName), role = ?FOLLOWER, zk_chroot_children = [], zk_revoke_candidates = [], zk_assign_candidates = []};
-monitor_adjacent_leader([_|AdjLeaderL], ZnodeSuffix, State)->
-	monitor_adjacent_leader(AdjLeaderL, ZnodeSuffix, State).
-	
-	
+	end.
+
+monitor_adjacent_leader(AdjLeaderSuffix, #state{zk_chroot = Chroot, zk_connection = Conn}= State) ->
+	FQZnodeName = Chroot ++ "/" ++ AdjLeaderSuffix,
+	erlzk:exists(Conn, FQZnodeName, self()),
+	State#state{zk_adj_leader = list_to_binary(FQZnodeName), role = ?FOLLOWER, zk_chroot_children = [], zk_revoke_candidates = [], zk_assign_candidates = []}.
 %%----------------------------------------------------------------------
 %%	Rebalance
 %%----------------------------------------------------------------------
-rebalance0(Nodes, Links, PrevLinks) ->
+rebalance(Nodes, Links, PrevLinks) ->
 	Ring = hash_ring:make(hash_ring:list_to_nodes(Links)),
 	Candidates = [{I, [L || {hash_ring_node,L,_,1} <- hash_ring:collect_nodes(I, length(Links), Ring)]} || I <- lists:sort(Nodes)],
-	rebalance1(Candidates, Links, [], PrevLinks).
+	rebalance_round_robbin(Candidates, Links, [], PrevLinks).
  
-rebalance1(_Candidates, [], ResultL, PrevLinks) ->
+rebalance_round_robbin(_Candidates, [], ResultL, PrevLinks) ->
 	Fun = fun(Key) -> {Key,lists:concat(proplists:get_all_values(Key,ResultL))} end,
 	NPrevLinks = [{K2, V1} || {K2, V1} <- PrevLinks, lists:member(K2,[K1 || {K1, _} <- ResultL])],
-	rebalance2(lists:keysort(1,lists:map(Fun,proplists:get_keys(ResultL))), NPrevLinks);
-rebalance1([{_N, []}|Candidates], Links, ResultL, PrevLinks) ->
-	rebalance1(Candidates, Links, ResultL, PrevLinks);
-rebalance1([{N, [L|Rest]}|Candidates], Links, ResultL, PrevLinks) ->
-	NewCandidates = [{K, [V1 || V1 <- V, V1/=L]} || {K, V} <- Candidates],
+	rebalance_sticky(lists:keysort(1,lists:map(Fun,proplists:get_keys(ResultL))), NPrevLinks);
+rebalance_round_robbin([{_N, []}|Candidates], Links, ResultL, PrevLinks) ->
+	rebalance_round_robbin(Candidates, Links, ResultL, PrevLinks);
+rebalance_round_robbin([{N, [L|Rest]}|Candidates], Links, ResultL, PrevLinks) ->
+	NewCandidates = [{K, [V1 || V1 <- V, V1/=L]} || {K, V} <- Candidates],  %% remove already assinged resource from candidate list from following nodes
 	NewLinks = [L0 || L0 <- Links, L0 /= L],
-	rebalance1(NewCandidates ++[{N, Rest}], NewLinks, [{N, [L]}|ResultL], PrevLinks).
+	rebalance_round_robbin(NewCandidates ++[{N, Rest}], NewLinks, [{N, [L]}|ResultL], PrevLinks).
 	
-rebalance2(NLinkList, [])->
+rebalance_sticky(NLinkList, [])->
 	NLinkList;
-rebalance2([{K,NLinks}|NRest], PrevLinkList)->
+rebalance_sticky([{K,NLinks}|NRest], PrevLinkList)->
 	case lists:keysearch(K, 1, PrevLinkList) of
 		{value, {K, PrevLinks}} ->
 			RevokeL = PrevLinks -- NLinks,
 			NAssignL = NLinks -- PrevLinks,
-			case RevokeL of
-				[] ->		
-					rebalance2(NRest ++ [{K,NLinks}], PrevLinkList--[{K, PrevLinks}]);
-				[R|_] ->
-				case NAssignL of
-					[] ->		
-						rebalance2(NRest ++ [{K,NLinks}], PrevLinkList--[{K, PrevLinks}]);
-					[A|_] ->
-						[{NK, [R]}] = [{K1, LL}||{K1, LL} <- [{K1, [L || L <- NLinks1, L==R]} || {K1,NLinks1} <- NRest], LL /=[]],
-						{value, {NK, OldLinks}} = lists:keysearch(NK, 1, NRest),
-						NewNRest = lists:keyreplace(NK, 1, NRest, {NK, (OldLinks -- [R]) ++ [A]}),
-						rebalance2([{K,(NLinks -- [A]) ++ [R]}|NewNRest], PrevLinkList)
-				end
-			end;
+			NLinkList = rebalance_sticky_exchange([{K,NLinks}|NRest], {K, PrevLinks}, RevokeL, NAssignL),
+			rebalance_sticky(NLinkList, PrevLinkList--[{K, PrevLinks}]);
 		_ ->
-			rebalance2(NRest ++ [{K,NLinks}], PrevLinkList)
+			rebalance_sticky(NRest ++ [{K,NLinks}], PrevLinkList)
 	end.
+
+rebalance_sticky_exchange([{K,NLinks}|NRest], _, [], _) ->
+	NRest ++ [{K,NLinks}];
+rebalance_sticky_exchange([{K,NLinks}|NRest], _, _, []) ->
+	NRest ++ [{K,NLinks}];
+rebalance_sticky_exchange([{K,NLinks}|NRest], {K, PrevLinks}, [R|RevokeL], [A|NAssignL]) ->
+	[{NK, [R]}] = [{K1, LL}||{K1, LL} <- [{K1, [L || L <- NLinks1, L==R]} || {K1,NLinks1} <- NRest], LL /=[]],
+	{value, {NK, OldLinks}} = lists:keysearch(NK, 1, NRest),
+	NewNRest = lists:keyreplace(NK, 1, NRest, {NK, (OldLinks -- [R]) ++ [A]}),
+	rebalance_sticky_exchange([{K,(NLinks -- [A]) ++ [R]}|NewNRest], {K, PrevLinks}, RevokeL, NAssignL).
 	
 revoke_candidates([], [], RvkList)->
 	RvkList;
