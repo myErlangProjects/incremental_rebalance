@@ -27,6 +27,7 @@
 				zk_assign_candidates :: undefined | list(),
 				local_resource_list :: undefined | list(),
 				resource_list :: undefined | list(),
+				call_back :: undefined | atom(),
 				role :: undefined | integer()
 			}).
 
@@ -52,10 +53,11 @@ init([SvrName, Chroot]) ->
 	erlzk:start(),
 	ZkHost = application:get_env(incremental_rebalance, 'zk.host',"127.0.0.1"),
 	DccLinks = application:get_env(incremental_rebalance, 'resource.list',[]),
+	Callback = application:get_env(incremental_rebalance, 'resource.callback',incremental_rebalance_default_callback),
 	{ok, Pid} = erlzk:connect([{ZkHost, 2181}], 30000,[{monitor, self()}]),
 	link(Pid),
 	error_logger:info_msg("Starting : ~p ~n", [SvrName]),
-	{ok, #state{svr_name = SvrName, zk_connection = Pid, zk_chroot = Chroot, zk_host = ZkHost, resource_list = DccLinks}}.											
+	{ok, #state{call_back = Callback, svr_name = SvrName, zk_connection = Pid, zk_chroot = Chroot, zk_host = ZkHost, resource_list = DccLinks}}.											
 	
 
 -spec handle_call(Request :: term(), From :: {pid(), Tag :: any()},
@@ -125,12 +127,14 @@ handle_info({node_data_changed, Znode},
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
 			error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [SvrName, RvkLinks]),
-			%% TODO: Revoke internal process
+			%% Revoke internal process
+			(State#state.call_back):onResourceRevoked(NData),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
-				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [SvrName, AsgLinks]);
-				%% TODO: Assign internal process
+				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [SvrName, AsgLinks]),
+				%% Assign internal process
+				(State#state.call_back):onResourceAssigned(NData);
 			true ->
 				error_logger:info_msg("[~p] LEADER No change resources~n", [SvrName])
 			end
@@ -158,12 +162,14 @@ handle_info({node_data_changed, Znode},
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
 			error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [SvrName, RvkLinks]),
-			%% TODO: Revoke internal process
+			%% Revoke internal process
+		    (State#state.call_back):onResourceRevoked(NData),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
-				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [SvrName, AsgLinks]);
-				%% TODO: Assign internal process
+				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [SvrName, AsgLinks]),
+				%% Assign internal process
+				(State#state.call_back):onResourceAssigned(NData);
 			true ->
 				error_logger:info_msg("[~p] LEADER No change resources~n",[SvrName])
 			end
@@ -249,12 +255,14 @@ handle_info({node_data_changed, Znode},
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
 			error_logger:info_msg("[~p] FOLLOWER Revoke called : Revoke resources : ~p~n", [SvrName,RvkLinks]),
-			%% TODO: Revoke internal process
+			%% Revoke internal process
+			(State#state.call_back):onResourceRevoked(NData),
 			erlzk:set_data(Pid, Znode, Data, -1);	%% redundant set_data to inform leader that revoke is done.
 		true ->
 			if  AsgLinks /= [] -> 
-				error_logger:info_msg("[~p] FOLLOWER Assign called : Assign resources : ~p~n", [SvrName,AsgLinks]);
-				%% TODO: Assign internal process
+				error_logger:info_msg("[~p] FOLLOWER Assign called : Assign resources : ~p~n", [SvrName,AsgLinks]),
+				%% Assign internal process
+				(State#state.call_back):onResourceAssigned(NData);
 			true ->
 				error_logger:info_msg("[~p] FOLLOWER No change resources~n", [SvrName])
 			end
