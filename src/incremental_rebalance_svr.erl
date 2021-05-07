@@ -36,6 +36,10 @@
 %%----------------------------------------------------------------------
 -define(LEADER, 1).		%% Leader and Coordinator
 -define(FOLLOWER, 0).	%% Follower
+-define(CONN_WAIT_T_MS, 1000).
+-define(RECON_WAIT_T_MS, 1000).
+-define(REPEAT_REBAL_T_MS, 10000).
+-define(INIT_REBAL_T_MS, application:get_env(incremental_rebalance, 'scheduled.rebalance.max.delay.ms', 20000)).
 %%----------------------------------------------------------------------
 %%  The incremental_rebalance_svr gen_server callbacks
 %%----------------------------------------------------------------------
@@ -102,22 +106,26 @@ handle_cast(_Request, State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%	
 %% LEADER messages
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-handle_info(timeout, #state{role = ?LEADER, zk_znode_suffix = ZnodeSuffix} = State) ->
-	error_logger:info_msg("LEADER: proceed_to_rebalance : ~p ~n", [ZnodeSuffix]),
-	proceed_to_rebalance(ZnodeSuffix, State);
+handle_info(timeout, 
+		#state{group_instance_id = InsId, zk_connection = Pid,zk_znode = Znode,zk_chroot = Chroot, 
+			zk_znode_suffix = ZnodeSuffix, role = ?LEADER} = State) ->
+	error_logger:info_msg("[~p] LEADER : proceed_to_rebalance : ~p ~n", [InsId, Znode]),
+	{ok, Children} = erlzk:get_children(Pid, Chroot),  %% Remove watcher, Get latest node list
+	NewState = State#state{zk_chroot_children = lists:sort(Children)},
+	proceed_to_rebalance(ZnodeSuffix, NewState);
 handle_info({node_children_changed, ChrootBin}, 
 		#state{group_instance_id = InsId, zk_connection = Pid,zk_znode = Znode,zk_chroot = Chroot, role = ?LEADER} = State) ->
-	error_logger:info_msg("node_children_changed : ~p|~p : ({node_children_changed, Chroot}  : ~p ~n", [InsId, Znode, {node_children_changed, ChrootBin}]),
+	error_logger:info_msg("[~p] LEADER : ~p : ({node_children_changed, Chroot}  : ~p ~n", [InsId, Znode, {node_children_changed, ChrootBin}]),
 	{ok, Children} = erlzk:get_children(Pid, Chroot),  %% Remove watcher
 	NewState = State#state{zk_chroot_children = lists:sort(Children)},
-	{noreply,NewState, 0};
+	{noreply, NewState, ?INIT_REBAL_T_MS};
 handle_info({node_deleted, DelZbode}, 
 	#state{group_instance_id = InsId,zk_connection = Pid,zk_chroot = Chroot, 
 		zk_znode = Znode, role = ?LEADER} = State) ->
 	error_logger:info_msg("[~p] LEADER : ~p : {node_deleted,DelZbode} : ~p ~n", [InsId, Znode, {node_deleted,DelZbode}]),
-	{ok, Children} = erlzk:get_children(Pid, Chroot),
+	{ok, Children} = erlzk:get_children(Pid, Chroot),  %% Remove watcher
 	NewState = State#state{zk_chroot_children = lists:sort(Children)},
-	{noreply, NewState, 0};
+	{noreply, NewState, ?INIT_REBAL_T_MS};
 handle_info({node_data_changed, Znode}, 
 		#state{group_instance_id = InsId,zk_chroot = Chroot, zk_znode = Znode, zk_chroot_children = ChildZNodes,zk_connection = Pid,
 			 zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = PData, role = ?LEADER} = State) ->
@@ -128,20 +136,20 @@ handle_info({node_data_changed, Znode},
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
-			error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [InsId, RvkLinks]),
+			error_logger:info_msg("[~p] LEADER :[1] Revoke called : Revoke resources : ~p~n", [InsId, RvkLinks]),
 			%% Revoke internal process
 			(State#state.rebalance_callback):onResourceRevoked([{'group.instance.id', InstantId},{'instance.data', NData}]),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
-				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [InsId, AsgLinks]),
+				error_logger:info_msg("[~p] LEADER :[1] Assign called : Assign resources : ~p~n", [InsId, AsgLinks]),
 				%% Assign internal process
 				(State#state.rebalance_callback):onResourceAssigned([{'group.instance.id', InstantId},{'instance.data', NData}]);
 			true ->
-				error_logger:info_msg("[~p] LEADER No change resources~n", [InsId])
+				error_logger:info_msg("[~p] LEADER :[1] No change resources~n", [InsId])
 			end
 	end,
-	error_logger:info_msg("[~p] LEADER RESOURCES : ~p~n", [InsId, NData]),
+	error_logger:info_msg("[~p] LEADER :[1] RESOURCES : ~p~n", [InsId, NData]),
 	erlzk:get_data(Pid, Znode, self()),
 	{ok, Children0} = erlzk:get_children(Pid, Chroot),
 	case lists:sort(Children0) of
@@ -150,9 +158,9 @@ handle_info({node_data_changed, Znode},
 			NewState = State#state{local_resource_list = NData},
 			{noreply, NewState};
 		Children -> %% children changed
-			error_logger:info_msg("[~p] LEADER leader_election : ~p~n", [InsId, Children]),
+			error_logger:info_msg("[~p] LEADER :[1] leader_election : ~p~n", [InsId, Children]),
 			NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = NData, zk_chroot_children = Children},
-			{noreply, NewState, 0}
+			{noreply, NewState, ?REPEAT_REBAL_T_MS}
 	end;
 handle_info({node_data_changed, Znode}, 
 		#state{group_instance_id = InsId,zk_chroot = Chroot, zk_znode = Znode, zk_znode_suffix = ZnodeSuffix,
@@ -165,21 +173,21 @@ handle_info({node_data_changed, Znode},
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
-			error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [InsId, RvkLinks]),
+			error_logger:info_msg("[~p] LEADER :[2] Revoke called : Revoke resources : ~p~n", [InsId, RvkLinks]),
 			%% Revoke internal process
 		    (State#state.rebalance_callback):onResourceRevoked([{'group.instance.id', InstantId},{'instance.data', NData}]),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
-				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [InsId, AsgLinks]),
+				error_logger:info_msg("[~p] LEADER :[2] Assign called : Assign resources : ~p~n", [InsId, AsgLinks]),
 				%% Assign internal process
 				(State#state.rebalance_callback):onResourceAssigned([{'group.instance.id', InstantId},{'instance.data', NData}]);
 			true ->
-				error_logger:info_msg("[~p] LEADER No change resources~n",[InsId])
+				error_logger:info_msg("[~p] LEADER :[2] No change resources~n",[InsId])
 			end
 	end,
 	erlzk:get_data(Pid, Znode, self()),
-	error_logger:info_msg("[~p] LEADER RESOURCES : ~p~n",[InsId, NData]),
+	error_logger:info_msg("[~p] LEADER :[2] RESOURCES : ~p~n",[InsId, NData]),
 	NewRvkCandidates = lists:keydelete(ZnodeSuffix, 2, RvkCandidates),
 	if 
 		NewRvkCandidates == [] ->
@@ -199,7 +207,7 @@ handle_info({node_data_changed, Znode},
 						Children ->
 							error_logger:info_msg("[~p] LEADER leader_election  : ~p ~n", [InsId, Children]),
 							NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = NData, zk_chroot_children = Children},
-							{noreply, NewState, 0}
+							{noreply, NewState, ?REPEAT_REBAL_T_MS}
 					end
 			end;
 		true ->
@@ -230,7 +238,7 @@ handle_info({node_data_changed, FZnode},
 						Children ->
 							error_logger:info_msg("[~p] LEADER leader_election  : ~p ~n", [InsId, Children]),
 							NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], zk_chroot_children = Children},
-							{noreply, NewState, 0}
+							{noreply, NewState, ?REPEAT_REBAL_T_MS}
 					end
 			end;
 		true ->
@@ -247,10 +255,10 @@ handle_info(timeout, #state{role = ?FOLLOWER, zk_znode_suffix = ZnodeSuffix} = S
 handle_info({node_deleted,AdjLeader}, 
 		#state{group_instance_id = InsId,zk_connection = Pid,zk_chroot = Chroot, 
 			zk_znode = Znode, zk_adj_leader = AdjLeader, role = ?FOLLOWER} = State) ->
-	error_logger:info_msg("node_deleted : ~p|~p : {node_deleted,AdjLeader} : ~p ~n", [InsId, Znode, {node_deleted,AdjLeader}]),
+	error_logger:info_msg("[~p] FOLLOWER : ~p : {node_deleted,AdjLeader} : ~p ~n", [InsId, Znode, {node_deleted,AdjLeader}]),
 	{ok, Children} = erlzk:get_children(Pid, Chroot),
 	NewState = leader_election(State#state{zk_chroot_children = lists:sort(Children)}),
-	{noreply, NewState, 0};
+	{noreply, NewState, ?INIT_REBAL_T_MS};
 handle_info({node_data_changed, Znode}, 
 	#state{group_instance_id = InsId,zk_znode = Znode,zk_connection = Pid, local_resource_list = PData, role = ?FOLLOWER} = State) ->
 	{ok, {Data, _}} = erlzk:get_data(Pid, Znode),
@@ -290,16 +298,16 @@ handle_info({expired, Host, Port}, #state{group_instance_id = InsId} = State) ->
 handle_info({connected, Host, Port}, #state{group_instance_id = InsId, zk_znode = undefined} = State) ->
 	error_logger:info_msg("Initial ZK session connected : ~p|~p : Info : ~p~n", [InsId, Host, Port]),
 	NewState = initiate_session(State),
-	{noreply, NewState, 0};
+	{noreply, NewState, ?CONN_WAIT_T_MS};
 handle_info({connected, Host, Port}, #state{group_instance_id = InsId, zk_connection = Pid, zk_znode = Znode} = State) ->
 	error_logger:info_msg("ZK session re-connected : ~p|~p : Info : ~p~n", [InsId, Host, Port]),
 	erlzk:delete(Pid, Znode),
 	NewState = initiate_session(State),
-	{noreply, NewState, 0};
-handle_info({node_deleted,Znode}, #state{group_instance_id = InsId,zk_znode = Znode} = State) ->
-	error_logger:info_msg("node_deleted : ~p|~p : {node_deleted,Znode} : ~p ~n", [InsId, Znode, {node_deleted,Znode}]),
+	{noreply, NewState, ?RECON_WAIT_T_MS};
+handle_info({node_deleted, Znode}, #state{group_instance_id = InsId,zk_znode = Znode} = State) ->
+	error_logger:info_msg("Node deleted : ~p|~p : {node_deleted,Znode} : ~p ~n", [InsId, Znode, {node_deleted,Znode}]),
 	NewState = initiate_session(State),
-	{noreply, NewState, 0};
+	{noreply, NewState, ?RECON_WAIT_T_MS};
 handle_info({'EXIT', OldPid, Reason}, #state{group_instance_id = InsId,zk_host = ZkHost, zk_znode = Znode} = State) when is_pid(OldPid) ->
 	error_logger:error_msg("ZK Conn proc down: ~p|~p : Info : ~p~n", [InsId, Znode, {'EXIT', OldPid, Reason}]),
 	{ok, Pid} = erlzk:connect([{ZkHost, 2181}], 30000,[{monitor, self()}]),
@@ -399,7 +407,7 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 							{noreply, State#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = [], zk_assign_candidates = []}};
 						Children ->
 							error_logger:info_msg("LEADER : leader_election ZNodes: ~p :~n New Children: ~p~n", [ZNodes, Children]),
-							{noreply,  State#state{zk_chroot_children = Children}, 0}
+							{noreply,  State#state{zk_chroot_children = Children}, ?REPEAT_REBAL_T_MS}
 					end
 			end;
 		true ->

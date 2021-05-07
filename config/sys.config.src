@@ -12,5 +12,5 @@
    {'group.instance.id', ${INSTANT_ID}},
    {'resource.list', ${RESOURCE_LIST}},
    {'rebalance.callback',${REBALANCE_CALLBACK}},
-   {'initial.timout.ms', 5000}]}
+   {'scheduled.rebalance.max.delay.ms', ${REBALANCE_MAX_DELAY_MS}}]}
 ].

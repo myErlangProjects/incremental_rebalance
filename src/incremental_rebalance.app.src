@@ -11,7 +11,11 @@
    incremental_rebalance
    ]},
   {env,[]},
-  {modules, []},
+  {modules, [incremental_rebalance_app,
+  incremental_rebalance_sup,
+  incremental_rebalance_svr,
+  incremental_rebalance_default_callback
+  ]},
 
   {licenses, ["Apache 2.0"]},
   {links, []}
