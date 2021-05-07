@@ -133,6 +133,7 @@ handle_info({node_data_changed, Znode},
 	[{'group.instance.id', InstantId},{'instance.data', NData}] = binary_to_term(Data),
 	error_logger:info_msg("[~p] LEADER :[1] ~p : {node_data_changed, Znode} : ~p ~n Data :~p~n", [InsId, Znode, {node_data_changed, Znode},
 	[{'group.instance.id', InstantId},{'instance.data', NData}]]),
+	error_log:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [[],[]]),
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
@@ -158,7 +159,7 @@ handle_info({node_data_changed, Znode},
 			NewState = State#state{local_resource_list = NData},
 			{noreply, NewState};
 		Children -> %% children changed
-			error_logger:info_msg("[~p] LEADER :[1] leader_election : ~p~n", [InsId, Children]),
+			error_logger:info_msg("[~p] LEADER :[1] REPEAT proceed_to_rebalance : ~p~n", [InsId, Children]),
 			NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = NData, zk_chroot_children = Children},
 			{noreply, NewState, ?REPEAT_REBAL_T_MS}
 	end;
@@ -170,6 +171,7 @@ handle_info({node_data_changed, Znode},
 	[{'group.instance.id', InstantId},{'instance.data', NData}] = binary_to_term(Data),
 	error_logger:info_msg("[~p] LEADER :[2] ~p : {node_data_changed, Znode} : ~p ~n Data :~p~n", [InsId, Znode, {node_data_changed, Znode},
 	[{'group.instance.id', InstantId},{'instance.data', NData}]]),
+	error_log:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [RvkCandidates,AsgCandidates]),
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
@@ -201,11 +203,12 @@ handle_info({node_data_changed, Znode},
 					{ok, Children0} = erlzk:get_children(State#state.zk_connection, State#state.zk_chroot),
 					case  lists:sort(Children0) of
 						ChildZNodes ->
+							error_logger:info_msg("LEADER : no resource change : ~p~n", [State#state.local_resource_list]),
 							erlzk:get_children(State#state.zk_connection, State#state.zk_chroot, self()), %% add watcher
 							NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = NData},
 							{noreply, NewState};
 						Children ->
-							error_logger:info_msg("[~p] LEADER leader_election  : ~p ~n", [InsId, Children]),
+							error_logger:info_msg("[~p] LEADER : REPEAT proceed_to_rebalance  : ~p ~n", [InsId, Children]),
 							NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = NData, zk_chroot_children = Children},
 							{noreply, NewState, ?REPEAT_REBAL_T_MS}
 					end
@@ -215,11 +218,14 @@ handle_info({node_data_changed, Znode},
 			{noreply, NewState}
 	end;
 handle_info({node_data_changed, FZnode}, 
-	#state{group_instance_id = InsId,zk_chroot = Chroot, zk_znode = _Znode, zk_znode_suffix = ZnodeSuffix,
+	#state{group_instance_id = InsId,zk_chroot = Chroot, zk_znode = Znode, zk_znode_suffix = ZnodeSuffix,
 		zk_chroot_children = ChildZNodes,zk_connection = Pid, zk_revoke_candidates = RvkCandidates, 
 			zk_assign_candidates = AsgCandidates, role = ?LEADER} = State) ->
 	[_, FZnodeSuffix] = string:tokens(binary_to_list(FZnode), "/"),
 	NewRvkCandidates = lists:keydelete(FZnodeSuffix, 2, RvkCandidates),
+	error_logger:info_msg("[~p] LEADER :[3] ~p : {node_data_changed, FZnode} : ~p ~n Data :~p~n", 
+		[InsId, Znode, {node_data_changed, FZnode}]),
+	error_log:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [NewRvkCandidates,AsgCandidates]),
 	if 
 		NewRvkCandidates == [] ->
 			[erlzk:set_data(Pid, Chroot ++ "/" ++ Z, term_to_binary([{'group.instance.id', I},{'instance.data', D}]), -1)
@@ -232,11 +238,12 @@ handle_info({node_data_changed, FZnode},
 					{ok, Children0} = erlzk:get_children(State#state.zk_connection, State#state.zk_chroot),
 					case  lists:sort(Children0) of
 						ChildZNodes ->
+							error_logger:info_msg("LEADER : no resource change : ~p~n", [State#state.local_resource_list]),
 							erlzk:get_children(State#state.zk_connection, State#state.zk_chroot, self()), %% add watcher
 							NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = []},
 							{noreply, NewState};
 						Children ->
-							error_logger:info_msg("[~p] LEADER leader_election  : ~p ~n", [InsId, Children]),
+							error_logger:info_msg("[~p] LEADER : REPEAT proceed_to_rebalance  : ~p ~n", [InsId, Children]),
 							NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], zk_chroot_children = Children},
 							{noreply, NewState, ?REPEAT_REBAL_T_MS}
 					end
@@ -406,7 +413,7 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 							erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
 							{noreply, State#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = [], zk_assign_candidates = []}};
 						Children ->
-							error_logger:info_msg("LEADER : leader_election ZNodes: ~p :~n New Children: ~p~n", [ZNodes, Children]),
+							error_logger:info_msg("LEADER : REPEAT proceed_to_rebalance ZNodes: ~p :~n New Children: ~p~n", [ZNodes, Children]),
 							{noreply,  State#state{zk_chroot_children = Children}, ?REPEAT_REBAL_T_MS}
 					end
 			end;

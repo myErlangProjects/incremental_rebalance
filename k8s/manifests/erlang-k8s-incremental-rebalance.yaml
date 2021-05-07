@@ -42,16 +42,6 @@ spec:
         app: erlang # has to match .spec.selector.matchLabels
     spec:
       terminationGracePeriodSeconds: 5
-      initContainers:
-      - name: create-chroot
-        image: 'k8s.gcr.io/kubernetes-zookeeper:1.0-3.4.10'
-        command:
-        - zkCli.sh
-        - "-server"
-        - "zk-cs.default.svc.cluster.local:2181"
-        - "create"
-        - "/zk"
-        - "my.chroot"
       containers:
       - name: erlang-k8s-node
         image: 'contactchanaka/erlang.incremental.rebalance:0.0.1'
@@ -87,5 +77,11 @@ spec:
         - name: ZK_ZNODE
           value: '"links"'
         - name: RESOURCE_LIST
-          value: '["link1", "link2", "link3", "link4", "link5", "link6", "link7"]'
+          value: '["link1", "link2", "link3", "link4", "link5"]'
+        - name: INSTANT_ID
+          value: '"$(ERLANG_POD_NAME)"'
+        - name: REBALANCE_MAX_DELAY_MS
+          value: '10000'
+        - name: REBALANCE_CALLBACK
+          value: "incremental_rebalance_default_callback"
       restartPolicy: Always
