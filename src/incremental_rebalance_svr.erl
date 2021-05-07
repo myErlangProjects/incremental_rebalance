@@ -133,14 +133,14 @@ handle_info({node_data_changed, Znode},
 	[{'group.instance.id', InstantId},{'instance.data', NData}] = binary_to_term(Data),
 	error_logger:info_msg("[~p] LEADER :[1] ~p : {node_data_changed, Znode} : ~p ~n Data :~p~n", [InsId, Znode, {node_data_changed, Znode},
 	[{'group.instance.id', InstantId},{'instance.data', NData}]]),
-	error_log:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [[],[]]),
+	error_logger:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [[],[]]),
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
 			error_logger:info_msg("[~p] LEADER :[1] Revoke called : Revoke resources : ~p~n", [InsId, RvkLinks]),
 			%% Revoke internal process
 			(State#state.rebalance_callback):onResourceRevoked([{'group.instance.id', InstantId},{'instance.data', NData}]),
-			erlzk:set_data(Pid, Znode, Data, -1);
+			erlzk:set_data(Pid, binary_to_list(Znode), Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
 				error_logger:info_msg("[~p] LEADER :[1] Assign called : Assign resources : ~p~n", [InsId, AsgLinks]),
@@ -171,14 +171,14 @@ handle_info({node_data_changed, Znode},
 	[{'group.instance.id', InstantId},{'instance.data', NData}] = binary_to_term(Data),
 	error_logger:info_msg("[~p] LEADER :[2] ~p : {node_data_changed, Znode} : ~p ~n Data :~p~n", [InsId, Znode, {node_data_changed, Znode},
 	[{'group.instance.id', InstantId},{'instance.data', NData}]]),
-	error_log:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [RvkCandidates,AsgCandidates]),
+	error_logger:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [RvkCandidates,AsgCandidates]),
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
 			error_logger:info_msg("[~p] LEADER :[2] Revoke called : Revoke resources : ~p~n", [InsId, RvkLinks]),
 			%% Revoke internal process
 		    (State#state.rebalance_callback):onResourceRevoked([{'group.instance.id', InstantId},{'instance.data', NData}]),
-			erlzk:set_data(Pid, Znode, Data, -1);
+			erlzk:set_data(Pid, binary_to_list(Znode), Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
 				error_logger:info_msg("[~p] LEADER :[2] Assign called : Assign resources : ~p~n", [InsId, AsgLinks]),
@@ -225,7 +225,7 @@ handle_info({node_data_changed, FZnode},
 	NewRvkCandidates = lists:keydelete(FZnodeSuffix, 2, RvkCandidates),
 	error_logger:info_msg("[~p] LEADER :[3] ~p : {node_data_changed, FZnode} : ~p ~n Data :~p~n", 
 		[InsId, Znode, {node_data_changed, FZnode}]),
-	error_log:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [NewRvkCandidates,AsgCandidates]),
+	error_logger:info_msg("LEADER : zk_revoke_candidates : ~p~n zk_assign_candidates : ~p~n", [NewRvkCandidates,AsgCandidates]),
 	if 
 		NewRvkCandidates == [] ->
 			[erlzk:set_data(Pid, Chroot ++ "/" ++ Z, term_to_binary([{'group.instance.id', I},{'instance.data', D}]), -1)
@@ -276,7 +276,7 @@ handle_info({node_data_changed, Znode},
 			error_logger:info_msg("[~p] FOLLOWER Revoke called : Revoke resources : ~p~n", [InsId,RvkLinks]),
 			%% Revoke internal process
 			(State#state.rebalance_callback):onResourceRevoked([{'group.instance.id', InstantId},{'instance.data', NData}]),
-			erlzk:set_data(Pid, Znode, Data, -1);	%% redundant set_data to inform leader that revoke is done.
+			erlzk:set_data(Pid, binary_to_list(Znode), Data, -1);	%% redundant set_data to inform leader that revoke is done.
 		true ->
 			if  AsgLinks /= [] -> 
 				error_logger:info_msg("[~p] FOLLOWER Assign called : Assign resources : ~p~n", [InsId,AsgLinks]),
@@ -390,10 +390,11 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 	PrevRRs =[{I, Z, D} || {Z, [{'group.instance.id', I},{'instance.data', D}]} <- [{Znode0, binary_to_term(Data)}|| {Znode0, {ok, {Data, _}}} 
 	              <- [{Znode0, erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode0)} 
 				    || Znode0 <- ZNodes]]],
-	NewRRs = rebalance(State#state.resource_list, PrevRRs),
-	RvkCandidates = revoke_candidates(lists:keysort(1,NewRRs), lists:keysort(1,PrevRRs), []),
-	AsgCandidates = assign_candidates(lists:keysort(1,NewRRs), lists:keysort(1,PrevRRs), []),
-	error_logger:info_msg("NewRRs : ~p~n PrevRRs : ~p~n RvkCandidates : ~p~n AsgCandidates : ~p~n",[NewRRs, PrevRRs, RvkCandidates, AsgCandidates]),
+	FiltPrevRRs = lists:ukeysort(1,lists:reverse(lists:keysort(2,PrevRRs))), %% Remove dead Znodes by removing old ones with duplicate ins_ids
+	NewRRs = rebalance(State#state.resource_list, FiltPrevRRs),
+	RvkCandidates = revoke_candidates(lists:keysort(1,NewRRs), lists:keysort(1,FiltPrevRRs), []),
+	AsgCandidates = assign_candidates(lists:keysort(1,NewRRs), lists:keysort(1,FiltPrevRRs), []),
+	error_logger:info_msg("NewRRs : ~p~n PrevRRs : ~p~n RvkCandidates : ~p~n AsgCandidates : ~p~n",[NewRRs, FiltPrevRRs, RvkCandidates, AsgCandidates]),
 	if 
 		RvkCandidates == [] ->
 			[erlzk:set_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Z,
@@ -435,43 +436,17 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 rebalance(Resources, PrevRRs) ->
 	Ring = hash_ring:make(hash_ring:list_to_nodes(Resources)),
 	Candidates = [{I, ZN, [L || {hash_ring_node,L,_,1} <- hash_ring:collect_nodes(I, length(Resources), Ring)]} || {I, ZN, _} <- lists:keysort(1, PrevRRs)],
-	RRL = rebalance_round_robbin(Candidates, Resources, []),
-	rebalance_sticky(RRL, PrevRRs).
+	rebalance_round_robbin_sticky(Candidates, Resources, []).
  
-rebalance_round_robbin(_Candidates, [], ResultL) ->
+rebalance_round_robbin_sticky(_Candidates, [], ResultL) ->
 	Fun = fun({N, ZN}) -> {N, ZN,lists:concat(proplists:get_all_values({N, ZN},ResultL))} end,
-	%%NPrevAsg = [{K2, Z2, V2} || {K2, Z2, V2} <- PrevAsg, lists:member({K2, Z2},[{K1, Z1} || {{K1, Z1}, _} <- ResultL])],
-	%%rebalance_sticky(lists:keysort(1,lists:map(Fun,proplists:get_keys(ResultL))), NPrevAsg);
 	lists:keysort(1,lists:map(Fun,proplists:get_keys(ResultL)));
-rebalance_round_robbin([{_N, _ZN, []}|Candidates], Resources, ResultL) ->
-	rebalance_round_robbin(Candidates, Resources, ResultL);
-rebalance_round_robbin([{N, ZN, [L|Rest]}|Candidates], Resources, ResultL) ->
+rebalance_round_robbin_sticky([{_N, _ZN, []}|Candidates], Resources, ResultL) ->
+	rebalance_round_robbin_sticky(Candidates, Resources, ResultL);
+rebalance_round_robbin_sticky([{N, ZN, [L|Rest]}|Candidates], Resources, ResultL) ->
 	NewCandidates = [{K, Z, [V1 || V1 <- V, V1/=L]} || {K, Z, V} <- Candidates],  %% remove already assinged resource from candidate list from following nodes
 	RResources = [L0 || L0 <- Resources, L0 /= L],
-	rebalance_round_robbin(NewCandidates ++[{N, ZN, Rest}], RResources, [{{N, ZN}, [L]}|ResultL]).
-	
-rebalance_sticky(NRRList, [])->
-	NRRList;
-rebalance_sticky([{K, ZN, NRRs}|NRest], PrevRRList)->
-	case lists:keysearch(K, 1, PrevRRList) of
-		{value, {K, ZN, PrevRRs}} ->
-			RevokeL = PrevRRs -- NRRs,
-			NAssignL = NRRs -- PrevRRs,
-			NRRList = rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], {K, ZN, PrevRRs}, RevokeL, NAssignL),
-			rebalance_sticky(NRRList, PrevRRList--[{K, ZN, PrevRRs}]);
-		_ ->
-			rebalance_sticky(NRest ++ [{K, ZN, NRRs}], PrevRRList)
-	end.
-
-rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], _, [], _) ->
-	NRest ++ [{K, ZN, NRRs}];
-rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], _, _, []) ->
-	NRest ++ [{K, ZN, NRRs}];
-rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], {K, ZN, PrevRRs}, [R|RevokeL], [A|NAssignL]) ->
-	[{NK, [R]}] = [{K1, LL}||{K1, LL} <- [{K1, [L || L <- NRRs1, L==R]} || {K1, _,NRRs1} <- NRest], LL /=[]],
-	{value, {NK, NZK, OldRRs}} = lists:keysearch(NK, 1, NRest),
-	NewNRest = lists:keyreplace(NK, 1, NRest, {NK, NZK, (OldRRs -- [R]) ++ [A]}),
-	rebalance_sticky_exchange([{K, ZN, (NRRs -- [A]) ++ [R]}|NewNRest], {K, ZN, PrevRRs}, RevokeL, NAssignL).
+	rebalance_round_robbin_sticky(NewCandidates ++[{N, ZN, Rest}], RResources, [{{N, ZN}, [L]}|ResultL]).
 	
 revoke_candidates([], [], RvkList)->
 	RvkList;
