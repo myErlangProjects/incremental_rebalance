@@ -31,8 +31,10 @@ init([]) ->
                  intensity => 0,
                  period => 1},
     Chroot	= application:get_env(incremental_rebalance, 'zk.chroot', "/zk"),
-    ServerName = node(),
-    ChildSpecs = [{incremental_rebalance_svr,{gen_server, start_link,[{local,incremental_rebalance_svr},incremental_rebalance_svr,[ServerName, Chroot],[]]},
+    {Mega,Sec,Milli} = os:timestamp(),
+	DefaultInstantId = lists:concat([integer_to_list(N) || N <- [Mega,Sec,Milli]]),
+	InstanceId = application:get_env(incremental_rebalance, 'group.instance.id', DefaultInstantId),
+    ChildSpecs = [{incremental_rebalance_svr,{gen_server, start_link,[{local,incremental_rebalance_svr},incremental_rebalance_svr,[InstanceId, Chroot],[]]},
                     permanent, 10000, worker, [incremental_rebalance_svr]
                 }],
     {ok, {SupFlags, ChildSpecs}}.
