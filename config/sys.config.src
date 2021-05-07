@@ -1,7 +1,7 @@
 [
   {erlang_k8s_cluster, 
   [{'k8s.svc.path', ${K8S_HEADLESS_SVC}},
-   {'world.list.verbosity', verbose},
+   {'world.list.verbosity', silent},
    {'world.list.interval.ms', 5000},
    {'dns.wait.ms', 5000},
    {'world.list', ${WORLD_LIST}}]},
@@ -9,6 +9,8 @@
   [{'zk.chroot', ${ZK_CHROOT}},
    {'zk.host', ${ZK_HOST}},
    {'zk.znode', ${ZK_ZNODE}},
+   {'group.instance.id', ${INSTANT_ID}},
    {'resource.list', ${RESOURCE_LIST}},
+   {'rebalance.callback',${REBALANCE_CALLBACK}},
    {'initial.timout.ms', 5000}]}
 ].

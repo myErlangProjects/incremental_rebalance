@@ -27,7 +27,8 @@
 				zk_assign_candidates :: undefined | list(),
 				local_resource_list :: undefined | list(),
 				resource_list :: undefined | list(),
-				call_back :: undefined | atom(),
+				rebalance_callback :: undefined | atom(),
+				group_instance_id :: undefined | string(),
 				role :: undefined | integer()
 			}).
 
@@ -53,11 +54,14 @@ init([SvrName, Chroot]) ->
 	erlzk:start(),
 	ZkHost = application:get_env(incremental_rebalance, 'zk.host',"127.0.0.1"),
 	DccLinks = application:get_env(incremental_rebalance, 'resource.list',[]),
-	Callback = application:get_env(incremental_rebalance, 'resource.callback',incremental_rebalance_default_callback),
+	Callback = application:get_env(incremental_rebalance, 'rebalance.callback', incremental_rebalance_default_callback),
+	{Mega,Sec,Milli} = os:timestamp(),
+	DefaultInstantId = lists:concat([integer_to_list(N) || N <- [Mega,Sec,Milli]]),
+	InstanceId = application:get_env(incremental_rebalance, 'group.instance.id', DefaultInstantId),
 	{ok, Pid} = erlzk:connect([{ZkHost, 2181}], 30000,[{monitor, self()}]),
 	link(Pid),
 	error_logger:info_msg("Starting : ~p ~n", [SvrName]),
-	{ok, #state{call_back = Callback, svr_name = SvrName, zk_connection = Pid, zk_chroot = Chroot, zk_host = ZkHost, resource_list = DccLinks}}.											
+	{ok, #state{rebalance_callback = Callback, group_instance_id = InstanceId, svr_name = SvrName, zk_connection = Pid, zk_chroot = Chroot, zk_host = ZkHost, resource_list = DccLinks}}.											
 	
 
 -spec handle_call(Request :: term(), From :: {pid(), Tag :: any()},
@@ -114,7 +118,7 @@ handle_info({node_children_changed, ChrootBin},
 handle_info({node_deleted, DelZbode}, 
 	#state{svr_name = SvrName,zk_connection = Pid,zk_chroot = Chroot, 
 		zk_znode = Znode, role = ?LEADER} = State) ->
-	error_logger:info_msg("node_deleted : ~p|~p : {node_deleted,DelZbode} : ~p ~n", [SvrName, Znode, {node_deleted,DelZbode}]),
+	error_logger:info_msg("[~p] LEADER : ~p : {node_deleted,DelZbode} : ~p ~n", [SvrName, Znode, {node_deleted,DelZbode}]),
 	{ok, Children} = erlzk:get_children(Pid, Chroot),
 	NewState = State#state{zk_chroot_children = lists:sort(Children)},
 	{noreply, NewState, 0};
@@ -122,19 +126,21 @@ handle_info({node_data_changed, Znode},
 		#state{svr_name = SvrName,zk_chroot = Chroot, zk_znode = Znode, zk_chroot_children = ChildZNodes,zk_connection = Pid,
 			 zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = PData, role = ?LEADER} = State) ->
 	{ok, {Data, _}} = erlzk:get_data(Pid, Znode),
-	NData = binary_to_term(Data),
+	[{'group.instance.id', InstantId},{'instance.data', NData}] = binary_to_term(Data),
+	error_logger:info_msg("[~p] LEADER :[1] ~p : {node_data_changed, Znode} : ~p ~n Data :~p~n", [SvrName, Znode, {node_data_changed, Znode},
+	[{'group.instance.id', InstantId},{'instance.data', NData}]]),
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
 			error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [SvrName, RvkLinks]),
 			%% Revoke internal process
-			(State#state.call_back):onResourceRevoked(NData),
+			(State#state.rebalance_callback):onResourceRevoked([{'group.instance.id', InstantId},{'instance.data', NData}]),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
 				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [SvrName, AsgLinks]),
 				%% Assign internal process
-				(State#state.call_back):onResourceAssigned(NData);
+				(State#state.rebalance_callback):onResourceAssigned([{'group.instance.id', InstantId},{'instance.data', NData}]);
 			true ->
 				error_logger:info_msg("[~p] LEADER No change resources~n", [SvrName])
 			end
@@ -157,31 +163,33 @@ handle_info({node_data_changed, Znode},
 			zk_chroot_children = ChildZNodes,zk_connection = Pid, zk_revoke_candidates = RvkCandidates, 
 				zk_assign_candidates = AsgCandidates, local_resource_list = PData, role = ?LEADER} = State) ->
 	{ok, {Data, _}} = erlzk:get_data(Pid, Znode),
-	NData = binary_to_term(Data),
+	[{'group.instance.id', InstantId},{'instance.data', NData}] = binary_to_term(Data),
+	error_logger:info_msg("[~p] LEADER :[2] ~p : {node_data_changed, Znode} : ~p ~n Data :~p~n", [SvrName, Znode, {node_data_changed, Znode},
+	[{'group.instance.id', InstantId},{'instance.data', NData}]]),
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
 			error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [SvrName, RvkLinks]),
 			%% Revoke internal process
-		    (State#state.call_back):onResourceRevoked(NData),
+		    (State#state.rebalance_callback):onResourceRevoked([{'group.instance.id', InstantId},{'instance.data', NData}]),
 			erlzk:set_data(Pid, Znode, Data, -1);
 		true ->
 			if  AsgLinks /= [] -> 
 				error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [SvrName, AsgLinks]),
 				%% Assign internal process
-				(State#state.call_back):onResourceAssigned(NData);
+				(State#state.rebalance_callback):onResourceAssigned([{'group.instance.id', InstantId},{'instance.data', NData}]);
 			true ->
 				error_logger:info_msg("[~p] LEADER No change resources~n",[SvrName])
 			end
 	end,
 	erlzk:get_data(Pid, Znode, self()),
 	error_logger:info_msg("[~p] LEADER RESOURCES : ~p~n",[SvrName, NData]),
-	NewRvkCandidates = lists:keydelete(ZnodeSuffix, 1, RvkCandidates),
+	NewRvkCandidates = lists:keydelete(ZnodeSuffix, 2, RvkCandidates),
 	if 
 		NewRvkCandidates == [] ->
-			[erlzk:set_data(Pid, Chroot ++ "/" ++ Znode1, term_to_binary(Links), -1)
-			|| {Znode1, Links} <- AsgCandidates],
-			case lists:keymember(ZnodeSuffix, 1, AsgCandidates) of
+			[erlzk:set_data(Pid, Chroot ++ "/" ++ Z, term_to_binary([{'group.instance.id', I},{'instance.data', D}]), -1)
+			|| {I, Z, D} <- AsgCandidates],
+			case lists:keymember(ZnodeSuffix, 2, AsgCandidates) of
 				true ->
 					NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = [], local_resource_list = NData},
 					{noreply, NewState};
@@ -207,12 +215,12 @@ handle_info({node_data_changed, FZnode},
 		zk_chroot_children = ChildZNodes,zk_connection = Pid, zk_revoke_candidates = RvkCandidates, 
 			zk_assign_candidates = AsgCandidates, role = ?LEADER} = State) ->
 	[_, FZnodeSuffix] = string:tokens(binary_to_list(FZnode), "/"),
-	NewRvkCandidates = lists:keydelete(FZnodeSuffix, 1, RvkCandidates),
+	NewRvkCandidates = lists:keydelete(FZnodeSuffix, 2, RvkCandidates),
 	if 
 		NewRvkCandidates == [] ->
-			[erlzk:set_data(Pid, Chroot ++ "/" ++ Znode1, term_to_binary(Links), -1)
-			|| {Znode1, Links} <- AsgCandidates],
-			case lists:keymember(ZnodeSuffix, 1, AsgCandidates) of
+			[erlzk:set_data(Pid, Chroot ++ "/" ++ Z, term_to_binary([{'group.instance.id', I},{'instance.data', D}]), -1)
+			|| {I, Z, D} <- AsgCandidates],
+			case lists:keymember(ZnodeSuffix, 2, AsgCandidates) of
 				true ->
 					NewState = State#state{zk_revoke_candidates = [], zk_assign_candidates = []},
 					{noreply, NewState};
@@ -250,26 +258,26 @@ handle_info({node_deleted,AdjLeader},
 handle_info({node_data_changed, Znode}, 
 	#state{svr_name = SvrName,zk_znode = Znode,zk_connection = Pid, local_resource_list = PData, role = ?FOLLOWER} = State) ->
 	{ok, {Data, _}} = erlzk:get_data(Pid, Znode),
-	NData = binary_to_term(Data),
+	[{'group.instance.id', InstantId},{'instance.data', NData}] = binary_to_term(Data),
 	RvkLinks = PData -- NData,
 	AsgLinks = NData -- PData,
 	if  RvkLinks /= [] -> 
 			error_logger:info_msg("[~p] FOLLOWER Revoke called : Revoke resources : ~p~n", [SvrName,RvkLinks]),
 			%% Revoke internal process
-			(State#state.call_back):onResourceRevoked(NData),
+			(State#state.rebalance_callback):onResourceRevoked([{'group.instance.id', InstantId},{'instance.data', NData}]),
 			erlzk:set_data(Pid, Znode, Data, -1);	%% redundant set_data to inform leader that revoke is done.
 		true ->
 			if  AsgLinks /= [] -> 
 				error_logger:info_msg("[~p] FOLLOWER Assign called : Assign resources : ~p~n", [SvrName,AsgLinks]),
 				%% Assign internal process
-				(State#state.call_back):onResourceAssigned(NData);
+				(State#state.rebalance_callback):onResourceAssigned([{'group.instance.id', InstantId},{'instance.data', NData}]);
 			true ->
 				error_logger:info_msg("[~p] FOLLOWER No change resources~n", [SvrName])
 			end
 	end,
 	error_logger:info_msg("[~p] FOLLOWER RESOURCES : ~p~n", [SvrName, NData]),
 	erlzk:get_data(Pid, Znode, self()),
-	{noreply, State#state{local_resource_list = binary_to_term(Data)}};
+	{noreply, State#state{local_resource_list = NData}};
 handle_info({node_data_changed, AdjLeader}, #state{zk_adj_leader = AdjLeader, zk_connection = Pid, role = ?FOLLOWER} = State) ->
 	erlzk:exists(Pid, AdjLeader, self()),
 	{noreply, State};
@@ -333,10 +341,11 @@ code_change(_OldVsn, State, _Extra) ->
 %%----------------------------------------------------------------------
 %%  internal functions
 %%----------------------------------------------------------------------
-initiate_session(#state{zk_connection = Pid, zk_chroot = Chroot} = State) ->
+initiate_session(#state{zk_connection = Pid, zk_chroot = Chroot, group_instance_id= InstantId} = State) ->
 	ZnodeName = application:get_env(incremental_rebalance, 'zk.znode',"resource"),
 	erlzk:create(Pid, Chroot, persistent),
-	{ok, Znode} = erlzk:create(Pid, Chroot ++ "/" ++ ZnodeName, term_to_binary([]), ephemeral_sequential),
+	Data = [{'group.instance.id', InstantId},{'instance.data', []}],
+	{ok, Znode} = erlzk:create(Pid, Chroot ++ "/" ++ ZnodeName, term_to_binary(Data), ephemeral_sequential),
 	{ok, _} = erlzk:exists(Pid, Znode, self()),
 	[_, ZnodeSuffix] = string:tokens(Znode, "/"),
 	{ok, Children} = erlzk:get_children(Pid, Chroot),
@@ -367,18 +376,19 @@ monitor_adjacent_leader(undefined, #state{role = ?LEADER}= State) ->
 
 proceed_to_rebalance(ZnodeSuffix, State)->
 	ZNodes = State#state.zk_chroot_children,
-	PrevLinks = [{Znode0, binary_to_term(Data)}|| {Znode0, {ok, {Data, _}}} 
+	PrevRRs =[{I, Z, D} || {Z, [{'group.instance.id', I},{'instance.data', D}]} <- [{Znode0, binary_to_term(Data)}|| {Znode0, {ok, {Data, _}}} 
 	              <- [{Znode0, erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode0)} 
-				    || Znode0 <- ZNodes]],
-	NewLinks = rebalance(ZNodes, State#state.resource_list, PrevLinks),
-	RvkCandidates = revoke_candidates(lists:keysort(1,NewLinks), lists:keysort(1,PrevLinks), []),
-	AsgCandidates = assign_candidates(lists:keysort(1,NewLinks), lists:keysort(1,PrevLinks), []),
-	%%io:fwrite("NewLinks : ~p~n PrevLinks : ~p~n RvkCandidates : ~p~n AsgCandidates : ~p~n",[NewLinks, PrevLinks, RvkCandidates, AsgCandidates]),
+				    || Znode0 <- ZNodes]]],
+	NewRRs = rebalance(State#state.resource_list, PrevRRs),
+	RvkCandidates = revoke_candidates(lists:keysort(1,NewRRs), lists:keysort(1,PrevRRs), []),
+	AsgCandidates = assign_candidates(lists:keysort(1,NewRRs), lists:keysort(1,PrevRRs), []),
+	error_logger:info_msg("NewRRs : ~p~n PrevRRs : ~p~n RvkCandidates : ~p~n AsgCandidates : ~p~n",[NewRRs, PrevRRs, RvkCandidates, AsgCandidates]),
 	if 
 		RvkCandidates == [] ->
-			[erlzk:set_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode1, term_to_binary(Links), -1)
-			|| {Znode1, Links} <- AsgCandidates],
-			case lists:keymember(ZnodeSuffix, 1, AsgCandidates) of
+			[erlzk:set_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Z,
+				 term_to_binary([{'group.instance.id', I},{'instance.data', D}]), -1)
+					|| {I, Z, D} <- AsgCandidates],
+			case lists:keymember(ZnodeSuffix, 2, AsgCandidates) of
 				true ->
 					%%io:fwrite("[~p|~p] {ZnodeSuffix, AsgCandidates} : ~p~n",[?MODULE, ?LINE, {ZnodeSuffix, AsgCandidates}]),
 					erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
@@ -387,22 +397,23 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 					{ok,  Children0} = erlzk:get_children(State#state.zk_connection, State#state.zk_chroot),
 					case lists:sort(Children0) of
 						ZNodes -> %% no change
-							error_logger:info_msg("New ZNodes : ~p~n", [ZNodes]),
+							error_logger:info_msg("LEADER : no resource change : ~p~n", [State#state.local_resource_list]),
 							erlzk:get_children(State#state.zk_connection, State#state.zk_chroot, self()), %% Add watcher
 							erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
 							{noreply, State#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = [], zk_assign_candidates = []}};
 						Children ->
-							error_logger:info_msg("leader_election ZNodes: ~p :~n New Children: ~p~n", [ZNodes, Children]),
+							error_logger:info_msg("LEADER : leader_election ZNodes: ~p :~n New Children: ~p~n", [ZNodes, Children]),
 							{noreply,  State#state{zk_chroot_children = Children}, 0}
 					end
 			end;
 		true ->
 			[
 				begin
-					erlzk:set_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode1, term_to_binary(Links), -1),
-					erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode1, self())
+					erlzk:set_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Z, 
+						term_to_binary([{'group.instance.id', I},{'instance.data', D}]), -1),
+					erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Z, self())
 				end
-			|| {Znode1, Links} <- RvkCandidates],
+			|| {I, Z, D} <- RvkCandidates],
 			% erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
 			{noreply,  State#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = RvkCandidates, zk_assign_candidates = AsgCandidates}}
 	end.
@@ -410,66 +421,68 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 %%----------------------------------------------------------------------
 %%	Rebalance
 %%----------------------------------------------------------------------
-rebalance(Nodes, Links, PrevLinks) ->
-	Ring = hash_ring:make(hash_ring:list_to_nodes(Links)),
-	Candidates = [{I, [L || {hash_ring_node,L,_,1} <- hash_ring:collect_nodes(I, length(Links), Ring)]} || I <- lists:sort(Nodes)],
-	rebalance_round_robbin(Candidates, Links, [], PrevLinks).
+rebalance(Resources, PrevRRs) ->
+	Ring = hash_ring:make(hash_ring:list_to_nodes(Resources)),
+	Candidates = [{I, ZN, [L || {hash_ring_node,L,_,1} <- hash_ring:collect_nodes(I, length(Resources), Ring)]} || {I, ZN, _} <- lists:keysort(1, PrevRRs)],
+	RRL = rebalance_round_robbin(Candidates, Resources, []),
+	rebalance_sticky(RRL, PrevRRs).
  
-rebalance_round_robbin(_Candidates, [], ResultL, PrevLinks) ->
-	Fun = fun(Key) -> {Key,lists:concat(proplists:get_all_values(Key,ResultL))} end,
-	NPrevLinks = [{K2, V1} || {K2, V1} <- PrevLinks, lists:member(K2,[K1 || {K1, _} <- ResultL])],
-	rebalance_sticky(lists:keysort(1,lists:map(Fun,proplists:get_keys(ResultL))), NPrevLinks);
-rebalance_round_robbin([{_N, []}|Candidates], Links, ResultL, PrevLinks) ->
-	rebalance_round_robbin(Candidates, Links, ResultL, PrevLinks);
-rebalance_round_robbin([{N, [L|Rest]}|Candidates], Links, ResultL, PrevLinks) ->
-	NewCandidates = [{K, [V1 || V1 <- V, V1/=L]} || {K, V} <- Candidates],  %% remove already assinged resource from candidate list from following nodes
-	NewLinks = [L0 || L0 <- Links, L0 /= L],
-	rebalance_round_robbin(NewCandidates ++[{N, Rest}], NewLinks, [{N, [L]}|ResultL], PrevLinks).
+rebalance_round_robbin(_Candidates, [], ResultL) ->
+	Fun = fun({N, ZN}) -> {N, ZN,lists:concat(proplists:get_all_values({N, ZN},ResultL))} end,
+	%%NPrevAsg = [{K2, Z2, V2} || {K2, Z2, V2} <- PrevAsg, lists:member({K2, Z2},[{K1, Z1} || {{K1, Z1}, _} <- ResultL])],
+	%%rebalance_sticky(lists:keysort(1,lists:map(Fun,proplists:get_keys(ResultL))), NPrevAsg);
+	lists:keysort(1,lists:map(Fun,proplists:get_keys(ResultL)));
+rebalance_round_robbin([{_N, _ZN, []}|Candidates], Resources, ResultL) ->
+	rebalance_round_robbin(Candidates, Resources, ResultL);
+rebalance_round_robbin([{N, ZN, [L|Rest]}|Candidates], Resources, ResultL) ->
+	NewCandidates = [{K, Z, [V1 || V1 <- V, V1/=L]} || {K, Z, V} <- Candidates],  %% remove already assinged resource from candidate list from following nodes
+	RResources = [L0 || L0 <- Resources, L0 /= L],
+	rebalance_round_robbin(NewCandidates ++[{N, ZN, Rest}], RResources, [{{N, ZN}, [L]}|ResultL]).
 	
-rebalance_sticky(NLinkList, [])->
-	NLinkList;
-rebalance_sticky([{K,NLinks}|NRest], PrevLinkList)->
-	case lists:keysearch(K, 1, PrevLinkList) of
-		{value, {K, PrevLinks}} ->
-			RevokeL = PrevLinks -- NLinks,
-			NAssignL = NLinks -- PrevLinks,
-			NLinkList = rebalance_sticky_exchange([{K,NLinks}|NRest], {K, PrevLinks}, RevokeL, NAssignL),
-			rebalance_sticky(NLinkList, PrevLinkList--[{K, PrevLinks}]);
+rebalance_sticky(NRRList, [])->
+	NRRList;
+rebalance_sticky([{K, ZN, NRRs}|NRest], PrevRRList)->
+	case lists:keysearch(K, 1, PrevRRList) of
+		{value, {K, ZN, PrevRRs}} ->
+			RevokeL = PrevRRs -- NRRs,
+			NAssignL = NRRs -- PrevRRs,
+			NRRList = rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], {K, ZN, PrevRRs}, RevokeL, NAssignL),
+			rebalance_sticky(NRRList, PrevRRList--[{K, ZN, PrevRRs}]);
 		_ ->
-			rebalance_sticky(NRest ++ [{K,NLinks}], PrevLinkList)
+			rebalance_sticky(NRest ++ [{K, ZN, NRRs}], PrevRRList)
 	end.
 
-rebalance_sticky_exchange([{K,NLinks}|NRest], _, [], _) ->
-	NRest ++ [{K,NLinks}];
-rebalance_sticky_exchange([{K,NLinks}|NRest], _, _, []) ->
-	NRest ++ [{K,NLinks}];
-rebalance_sticky_exchange([{K,NLinks}|NRest], {K, PrevLinks}, [R|RevokeL], [A|NAssignL]) ->
-	[{NK, [R]}] = [{K1, LL}||{K1, LL} <- [{K1, [L || L <- NLinks1, L==R]} || {K1,NLinks1} <- NRest], LL /=[]],
-	{value, {NK, OldLinks}} = lists:keysearch(NK, 1, NRest),
-	NewNRest = lists:keyreplace(NK, 1, NRest, {NK, (OldLinks -- [R]) ++ [A]}),
-	rebalance_sticky_exchange([{K,(NLinks -- [A]) ++ [R]}|NewNRest], {K, PrevLinks}, RevokeL, NAssignL).
+rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], _, [], _) ->
+	NRest ++ [{K, ZN, NRRs}];
+rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], _, _, []) ->
+	NRest ++ [{K, ZN, NRRs}];
+rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], {K, ZN, PrevRRs}, [R|RevokeL], [A|NAssignL]) ->
+	[{NK, [R]}] = [{K1, LL}||{K1, LL} <- [{K1, [L || L <- NRRs1, L==R]} || {K1, _,NRRs1} <- NRest], LL /=[]],
+	{value, {NK, NZK, OldRRs}} = lists:keysearch(NK, 1, NRest),
+	NewNRest = lists:keyreplace(NK, 1, NRest, {NK, NZK, (OldRRs -- [R]) ++ [A]}),
+	rebalance_sticky_exchange([{K, ZN, (NRRs -- [A]) ++ [R]}|NewNRest], {K, ZN, PrevRRs}, RevokeL, NAssignL).
 	
 revoke_candidates([], [], RvkList)->
 	RvkList;
-revoke_candidates([{K, _}|NRest], [{K, []}|PRest], RvkList)->
+revoke_candidates([{K, ZN, _}|NRest], [{K, ZN, []}|PRest], RvkList)->
 	revoke_candidates(NRest, PRest, RvkList);
-revoke_candidates([{K, NVL}|NRest], [{K, PVL}|PRest], RvkList)->
+revoke_candidates([{K, ZN, NVL}|NRest], [{K, ZN, PVL}|PRest], RvkList)->
 	case lists:filter(fun(E) -> lists:member(E, NVL) end, PVL) of
 		PVL ->
 			revoke_candidates(NRest, PRest, RvkList);
 		RvkL ->
-			revoke_candidates(NRest, PRest, RvkList++[{K, RvkL}])
+			revoke_candidates(NRest, PRest, RvkList++[{K, ZN, RvkL}])
 	end.
 	
 assign_candidates([], [], AsgList)->
 	AsgList;
-assign_candidates([{K, NVL}|NRest], [{K, []}|PRest], AsgList)->
-	assign_candidates(NRest, PRest, AsgList++[{K, NVL}]);
-assign_candidates([{K, NVL}|NRest], [{K, PVL}|PRest], AsgList)->
+assign_candidates([{K, ZN, NVL}|NRest], [{K, ZN, []}|PRest], AsgList)->
+	assign_candidates(NRest, PRest, AsgList++[{K, ZN, NVL}]);
+assign_candidates([{K, ZN, NVL}|NRest], [{K, ZN, PVL}|PRest], AsgList)->
 	AVL = NVL -- PVL,
 	case AVL of
 		[] ->
 			assign_candidates(NRest, PRest, AsgList);
 		_ ->
-			assign_candidates(NRest, PRest, AsgList++[{K, NVL}])
+			assign_candidates(NRest, PRest, AsgList++[{K, ZN, NVL}])
 	end.
