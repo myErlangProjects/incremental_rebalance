@@ -2,7 +2,7 @@
 Automatic resource rebalance(incremental) among erlang applications in k8s. 
 In this application zookeeper has been used as the group coordinator. Zookeeper client application [`erlzk`](https://github.com/huaban/erlzk) is used.
 
-Consistant hashing (hash ring) has been used in order to minimize the resource realocation while achieving resource equally dictribution during node joining and leaving of the erlang cluster. Consistent hashing algorithm implementaion lib [`hash_ring`](https://github.com/sile/hash_ring) is used.
+Roundrobbin with sticky instance id configuration has been used in order to minimize the resource realocation while achieving resource equally dictribution during node joining and leaving of the erlang cluster.
 
 Erlang peer discovery within k8s cluster is achieved with [`erlang_k8s_cluster`](https://github.com/myErlangProjects/erlang_k8s_cluster) application.
 
