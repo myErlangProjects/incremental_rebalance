@@ -391,7 +391,7 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 	              <- [{Znode0, erlzk:get_data(State#state.zk_connection, State#state.zk_chroot ++ "/" ++ Znode0)} 
 				    || Znode0 <- ZNodes]]],
 	FiltPrevRRs = lists:ukeysort(1,lists:reverse(lists:keysort(2,PrevRRs))), %% Remove dead Znodes by removing old ones with duplicate ins_ids
-	NewRRs = rebalance(State#state.resource_list, FiltPrevRRs),
+    NewRRs = rebalance(State#state.resource_list, FiltPrevRRs),
 	RvkCandidates = revoke_candidates(lists:keysort(1,NewRRs), lists:keysort(1,FiltPrevRRs), []),
 	AsgCandidates = assign_candidates(lists:keysort(1,NewRRs), lists:keysort(1,FiltPrevRRs), []),
 	error_logger:info_msg("NewRRs : ~p~n PrevRRs : ~p~n RvkCandidates : ~p~n AsgCandidates : ~p~n",[NewRRs, FiltPrevRRs, RvkCandidates, AsgCandidates]),
@@ -433,20 +433,42 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 %%----------------------------------------------------------------------
 %%	Rebalance
 %%----------------------------------------------------------------------
+
 rebalance(Resources, PrevRRs) ->
-	Ring = hash_ring:make(hash_ring:list_to_nodes(Resources)),
-	Candidates = [{I, ZN, [L || {hash_ring_node,L,_,1} <- hash_ring:collect_nodes(I, length(Resources), Ring)]} || {I, ZN, _} <- lists:keysort(1, PrevRRs)],
-	rebalance_round_robbin_sticky(Candidates, Resources, []).
+	Candidates = [{I, ZN, []} || {I, ZN, _} <- lists:keysort(1, PrevRRs)],
+	RRL = rebalance_round_robbin(Candidates, lists:usort(Resources), []),
+	rebalance_sticky(RRL, PrevRRs).
  
-rebalance_round_robbin_sticky(_Candidates, [], ResultL) ->
+rebalance_round_robbin(_Candidates, [], ResultL) ->
 	Fun = fun({N, ZN}) -> {N, ZN,lists:concat(proplists:get_all_values({N, ZN},ResultL))} end,
 	lists:keysort(1,lists:map(Fun,proplists:get_keys(ResultL)));
-rebalance_round_robbin_sticky([{_N, _ZN, []}|Candidates], Resources, ResultL) ->
-	rebalance_round_robbin_sticky(Candidates, Resources, ResultL);
-rebalance_round_robbin_sticky([{N, ZN, [L|Rest]}|Candidates], Resources, ResultL) ->
-	NewCandidates = [{K, Z, [V1 || V1 <- V, V1/=L]} || {K, Z, V} <- Candidates],  %% remove already assinged resource from candidate list from following nodes
-	RResources = [L0 || L0 <- Resources, L0 /= L],
-	rebalance_round_robbin_sticky(NewCandidates ++[{N, ZN, Rest}], RResources, [{{N, ZN}, [L]}|ResultL]).
+rebalance_round_robbin([{N, ZN, []}|Candidates], [L|RResources], ResultL) ->
+	rebalance_round_robbin(Candidates ++[{N, ZN, []}], RResources, [{{N, ZN}, [L]}|ResultL]).
+
+rebalance_sticky(NRRList, [])->
+		NRRList;
+rebalance_sticky([{K, ZN, NRRs}|NRest], PrevRRList)->
+		case lists:keysearch(K, 1, PrevRRList) of
+			{value, {K, ZN, []}} ->
+				rebalance_sticky(NRest ++ [{K, ZN, NRRs}], PrevRRList--[{K, ZN, []}]);
+			{value, {K, ZN, PrevRRs}} ->
+				RevokeL = PrevRRs -- NRRs,
+				NAssignL = NRRs -- PrevRRs,
+				NRRList = rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], {K, ZN, PrevRRs}, RevokeL, NAssignL),
+				rebalance_sticky(NRRList, PrevRRList--[{K, ZN, PrevRRs}]);
+			_ ->
+				rebalance_sticky(NRest ++ [{K, ZN, NRRs}], PrevRRList)
+		end.
+	
+rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], _, [], _) ->
+		NRest ++ [{K, ZN, NRRs}];
+rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], _, _, []) ->
+		NRest ++ [{K, ZN, NRRs}];
+rebalance_sticky_exchange([{K, ZN, NRRs}|NRest], {K, ZN, PrevRRs}, [R|RevokeL], [A|NAssignL]) ->
+		[{NK, [R]}] = [{K1, LL}||{K1, LL} <- [{K1, [L || L <- NRRs1, L==R]} || {K1, _,NRRs1} <- NRest], LL /=[]],
+		{value, {NK, NZK, OldRRs}} = lists:keysearch(NK, 1, NRest),
+		NewNRest = lists:keyreplace(NK, 1, NRest, {NK, NZK, (OldRRs -- [R]) ++ [A]}),
+		rebalance_sticky_exchange([{K, ZN, (NRRs -- [A]) ++ [R]}|NewNRest], {K, ZN, PrevRRs}, RevokeL, NAssignL).
 	
 revoke_candidates([], [], RvkList)->
 	RvkList;
