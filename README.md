@@ -34,7 +34,7 @@ Docker-compose and k8s manifest will create above pre-requisites before starting
 
 ### Docker compose
 ```
-docker-compose up
+docker-compose up -d
 ```
 Clear out
 ```
