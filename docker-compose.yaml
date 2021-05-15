@@ -55,6 +55,6 @@ services:
            - ZK_HOST="zookeeper-server"
            - ZK_ZNODE="links"
            - INSTANT_ID= "erlang.k8s.node-2"
-           - REBALANCE_CALLBACK='incremental_rebalance_default_callback'
+           - CALLBACK_MODULE='incremental_rebalance_default_callback'
            - REBALANCE_MAX_DELAY_MS=20000 
            - RESOURCE_LIST=[link1, link2, link3, link4, link5]

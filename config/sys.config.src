@@ -10,7 +10,8 @@
    {'zk.host', ${ZK_HOST}},
    {'zk.znode', ${ZK_ZNODE}},
    {'group.instance.id', ${INSTANT_ID}},
-   {'resource.list', ${RESOURCE_LIST}},
-   {'rebalance.callback',${REBALANCE_CALLBACK}},
-   {'scheduled.rebalance.max.delay.ms', ${REBALANCE_MAX_DELAY_MS}}]}
+   {'callback.module',${CALLBACK_MODULE}},
+   {'scheduled.rebalance.max.delay.ms', ${REBALANCE_MAX_DELAY_MS}}]},
+   {my_app,
+   [{'resource.list', ${RESOURCE_LIST}}]}
 ].

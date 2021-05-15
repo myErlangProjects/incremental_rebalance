@@ -82,6 +82,6 @@ spec:
           value: '"$(ERLANG_POD_NAME)"'
         - name: REBALANCE_MAX_DELAY_MS
           value: '10000'
-        - name: REBALANCE_CALLBACK
+        - name: CALLBACK_MODULE
           value: "incremental_rebalance_default_callback"
       restartPolicy: Always
