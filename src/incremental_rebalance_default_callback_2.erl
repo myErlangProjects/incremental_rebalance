@@ -3,7 +3,7 @@
 %% @end
 %%%-------------------------------------------------------------------
 
--module(incremental_rebalance_default_callback).
+-module(incremental_rebalance_default_callback_2).
 -author('Chanaka Fernando <contactchanaka@gmail.com>').
 -export([init/1]).
 -export([isDataChanged/2]).
@@ -14,7 +14,8 @@
 
 -define(LEADER, 'LEADER').		%% Leader and Coordinator
 -define(FOLLOWER, 'FOLLOWER').	%% Follower
--define(RESOURCE_LIST,[link1, link2, link3, link4, link5]).
+-define(RESOURCE_LIST,[{ocs1, [link11, link12, link13, link14, link15]},
+					{ocs2, [link21, link22, link23]}]).
 -record(state,{local_resource_list :: undefined | list(),
                 resource_list :: undefined | list(),
                 instance_id :: undefined | string(),
@@ -99,13 +100,44 @@ onResourceAssigned([{'group.instance.id', InstanceId},{'instance.data', NData}],
 rebalance(Candidates, PrevRRs, State) ->
     Resources = State#state.resource_list,
     error_logger:info_msg("[callback] rebalance : ~p~n", [Resources]),
-    RRL = rebalance_round_robbin(Candidates, lists:usort(Resources)),
+    RRL = rebalance_round_robbin(Candidates, lists:usort(Resources), PrevRRs),
     {ok, State, rebalance_sticky(RRL, PrevRRs)}.
-     
-rebalance_round_robbin(Candidates, []) ->
-    lists:keysort(1,Candidates);
-rebalance_round_robbin([{N, ZN, RRs}|Candidates], [L|RResources]) ->
-    rebalance_round_robbin(Candidates ++[{N, ZN, [L|RRs]}], RResources).
+
+rebalance_round_robbin(Candidates, Resources, PrevRRs) ->
+	rebalance_round_robbin(Resources, lists:keysort(1, Candidates), [], [], lists:keysort(1, PrevRRs)).
+rebalance_round_robbin([], Nodes, OldNodes, Acc, _) ->
+    lists:keysort(1,Nodes ++ OldNodes ++ Acc);
+
+rebalance_round_robbin([{_, []}|Resources], Nodes, OldNodes, Acc, PrevRRs) ->
+	rebalance_round_robbin(Resources, lists:keysort(1, Nodes ++ OldNodes ++ Acc), [], [], PrevRRs);
+
+rebalance_round_robbin([{G, [R|RL]}|Resources], [], [], Acc, PrevRRs) ->
+	rebalance_round_robbin([{G, [R|RL]}|Resources], lists:keysort(1, Acc), [], [], PrevRRs);
+
+rebalance_round_robbin([{G, [R|RL]}|Resources], [], [{N, Z, NRL}|Nodes], Acc, PrevRRs) ->
+	rebalance_round_robbin([{G, RL}|Resources], lists:keysort(1, Nodes), [],  Acc ++ [{N, Z, [{G, R}|NRL]}], PrevRRs);
+	
+rebalance_round_robbin([{G, [R|RL]}|Resources], [{N, Z, NRL}|Nodes], OldNodes, Acc, PrevRRs) ->
+	Exists = exists({G, R}, N, PrevRRs),
+	if
+		Exists ->
+			rebalance_round_robbin([{G, RL}|Resources], lists:keysort(1, Nodes ++ OldNodes), [], Acc ++ [{N, Z, [{G, R}|NRL]}], PrevRRs);
+		true ->
+			rebalance_round_robbin([{G, [R|RL]}|Resources], Nodes, OldNodes ++ [{N, Z, NRL}], Acc, PrevRRs)
+	end.
+
+exists(_, _, []) ->
+	false;
+exists({G, R}, N, [{N, _, PGRL}|_]) ->
+	ResPRL = [R1 || {G1, R1} <- PGRL, G == G1, R ==R1],
+	case ResPRL of
+		[R] ->	
+			true;
+		_ ->
+			false
+	end;
+exists({G, R}, N, [{_, _, _}|PrevRRs]) ->
+	exists({G, R}, N, PrevRRs).
    
 rebalance_sticky(NRRList, [])->
     NRRList;

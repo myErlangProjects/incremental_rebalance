@@ -15,7 +15,8 @@
   {modules, [incremental_rebalance_app,
   incremental_rebalance_sup,
   incremental_rebalance_svr,
-  incremental_rebalance_default_callback
+  incremental_rebalance_default_callback_1,
+  incremental_rebalance_default_callback_2
   ]},
 
   {licenses, ["Apache 2.0"]},
