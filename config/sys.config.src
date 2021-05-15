@@ -6,12 +6,10 @@
    {'dns.wait.ms', 5000},
    {'world.list', ${WORLD_LIST}}]},
   {incremental_rebalance, 
-  [{'zk.chroot', ${ZK_CHROOT}},
-   {'zk.host', ${ZK_HOST}},
+  [{'zk.server.list', ${ZK_LIST}},
+   {'zk.chroot.prefix', ${ZK_CHROOT_PREFIX}},
    {'zk.znode', ${ZK_ZNODE}},
    {'group.instance.id', ${INSTANT_ID}},
-   {'callback.module',${CALLBACK_MODULE}},
-   {'scheduled.rebalance.max.delay.ms', ${REBALANCE_MAX_DELAY_MS}}]},
-   {my_app,
-   [{'resource.list', ${RESOURCE_LIST}}]}
+   {'callback.module.list',${CALLBACK_MODULE_LIST}},
+   {'scheduled.rebalance.max.delay.ms', ${REBALANCE_MAX_DELAY_MS}}]}
 ].

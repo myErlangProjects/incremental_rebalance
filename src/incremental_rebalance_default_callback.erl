@@ -12,16 +12,16 @@
 -export([rebalance/3]).
 -export([revokeCandidates/3, assignCandidates/3]).
 
--define(LEADER, 1).		%% Leader and Coordinator
--define(FOLLOWER, 0).	%% Follower
-
+-define(LEADER, l).		%% Leader and Coordinator
+-define(FOLLOWER, f).	%% Follower
+-define(RESOURCE_LIST,[link1, link2, link3, link4, link5]).
 -record(state,{local_resource_list :: undefined | list(),
                 resource_list :: undefined | list(),
                 instance_id :: undefined | string(),
                 role :: undefined | integer()}).
 
 init(InstanceId) ->
-    ResourceList = application:get_env(my_app, 'resource.list',[]),
+    ResourceList = ?RESOURCE_LIST,
     InitialData = [],
     {ok, InitialData, #state{local_resource_list =InitialData, resource_list = ResourceList, instance_id = InstanceId}}.
 
@@ -31,15 +31,15 @@ isDataChanged([{'group.instance.id', _InstanceId},{'instance.data', NData}], #st
     if
         RvkLinks /= [] ->
             error_logger:info_msg("[~p] LEADER Revoke called : Revoke resources : ~p~n", [?MODULE,RvkLinks]),
-            {revoke, State};
+            {ok, revoke, State};
         true ->
             if
                 AsgLinks /=[] ->
                     error_logger:info_msg("[~p] LEADER Assign called : Assign resources : ~p~n", [?MODULE,AsgLinks]),
-                    {assign, State};  
+                    {ok, assign, State};  
                 true ->
                     error_logger:info_msg("[~p] LEADER No change resources~n", [?MODULE]),
-                    {none, State} 
+                    {ok, none, State} 
             end
     end;
 isDataChanged([{'group.instance.id', _InstanceId},{'instance.data', NData}], #state{local_resource_list = PData, role = ?FOLLOWER} = State) ->
@@ -48,15 +48,15 @@ isDataChanged([{'group.instance.id', _InstanceId},{'instance.data', NData}], #st
     if
         RvkLinks /= [] ->
             error_logger:info_msg("[~p] FOLLOWER Revoke called : Revoke resources : ~p~n", [?MODULE,RvkLinks]),
-            {revoke, State};
+            {ok, revoke, State};
         true ->
             if
                 AsgLinks /=[] ->
                     error_logger:info_msg("[~p] FOLLOWER Assign called : Assign resources : ~p~n", [?MODULE,AsgLinks]),
-                   {assign, State};  
+                   {ok, assign, State};  
                 true ->
                     error_logger:info_msg("[~p] FOLLOWER No change resources~n", [?MODULE]),
-                   {none, State} 
+                   {ok, none, State} 
             end
     end.
 
@@ -96,6 +96,7 @@ onResourceAssigned([{'group.instance.id', InstanceId},{'instance.data', NData}],
 
 rebalance(Candidates, PrevRRs, State) ->
     Resources = State#state.resource_list,
+    error_logger:info_msg("[callback] rebalance : ~p~n", [Resources]),
     RRL = rebalance_round_robbin(Candidates, lists:usort(Resources)),
     {ok, State, rebalance_sticky(RRL, PrevRRs)}.
      

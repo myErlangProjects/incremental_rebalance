@@ -70,18 +70,16 @@ spec:
               key: ERLANG_COOKIE
         - name: WORLD_LIST
           value: "[]"
-        - name: ZK_CHROOT
-          value: '"/zk"'
-        - name: ZK_HOST
-          value: '"zk-cs.default.svc.cluster.local"'
+        - name: ZK_LIST
+          value: '"zk-cs.default.svc.cluster.local:2181"'
+        - name: ZK_CHROOT_PREFIX
+          value: '"zk"'
         - name: ZK_ZNODE
           value: '"links"'
-        - name: RESOURCE_LIST
-          value: '["link1", "link2", "link3", "link4", "link5"]'
         - name: INSTANT_ID
           value: '"$(ERLANG_POD_NAME)"'
         - name: REBALANCE_MAX_DELAY_MS
           value: '10000'
-        - name: CALLBACK_MODULE
-          value: "incremental_rebalance_default_callback"
+        - name: CALLBACK_MODULE_LIST
+          value: '["incremental_rebalance_default_callback"]'
       restartPolicy: Always

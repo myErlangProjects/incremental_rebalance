@@ -31,13 +31,12 @@ services:
            - K8S_HEADLESS_SVC=[]
            - WORLD_LIST=['erlang.k8s.node-1', 'erlang.k8s.node-2']
 
-           - ZK_CHROOT="/zk"
-           - ZK_HOST="zookeeper-server"
+           - ZK_LIST="zookeeper-server:2181"
+           - ZK_CHROOT_PREFIX="zk"
            - ZK_ZNODE="links"
            - INSTANT_ID="erlang.k8s.node-1"
-           - REBALANCE_CALLBACK='incremental_rebalance_default_callback'
+           - CALLBACK_MODULE_LIST=['incremental_rebalance_default_callback']
            - REBALANCE_MAX_DELAY_MS=20000 
-           - RESOURCE_LIST=[link1, link2, link3, link4, link5]
 
     erlang.k8s.node-2:
         image: 'contactchanaka/erlang.incremental.rebalance:0.0.1'
@@ -51,10 +50,9 @@ services:
            - K8S_HEADLESS_SVC=[]
            - WORLD_LIST=['erlang.k8s.node-1', 'erlang.k8s.node-2']
 
-           - ZK_CHROOT="/zk"
-           - ZK_HOST="zookeeper-server"
+           - ZK_LIST="zookeeper-server:2181"
+           - ZK_CHROOT_PREFIX="zk"
            - ZK_ZNODE="links"
            - INSTANT_ID= "erlang.k8s.node-2"
-           - CALLBACK_MODULE='incremental_rebalance_default_callback'
+           - CALLBACK_MODULE_LIST=['incremental_rebalance_default_callback']
            - REBALANCE_MAX_DELAY_MS=20000 
-           - RESOURCE_LIST=[link1, link2, link3, link4, link5]

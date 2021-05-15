@@ -33,8 +33,8 @@
 %%----------------------------------------------------------------------
 %%  The incremental_rebalance_svr Macros
 %%----------------------------------------------------------------------
--define(LEADER, 1).		%% Leader and Coordinator
--define(FOLLOWER, 0).	%% Follower
+-define(LEADER, 'LEADER').		%% Leader and Coordinator
+-define(FOLLOWER, 'FOLLOWER').	%% Follower
 -define(CONN_WAIT_T_MS, 1000).
 -define(RECON_WAIT_T_MS, 1000).
 -define(REPEAT_REBAL_T_MS, 10000).
@@ -51,20 +51,20 @@
 %% @see //stdlib/gen_server:init/1
 %% @private
 %%
-init([]) ->
+init([CallbackModule]) ->
 	process_flag(trap_exit, true),
 	erlzk:start(),
-	ZkHostPortList = application:get_env(incremental_rebalance, 'zk.host',"127.0.0.1:2181"),
+	ZkHostPortList = application:get_env(incremental_rebalance, 'zk.server.list',"127.0.0.1:2181"),
 	ZkSvrList = [{H, list_to_integer(P)}|| [H,P] <- [string:tokens(ZkHostPort, ": ") || ZkHostPort <- string:tokens(ZkHostPortList, ", ")]],
-	Chroot	= application:get_env(incremental_rebalance, 'zk.chroot', "/zk"),
-	Callback = application:get_env(incremental_rebalance, 'callback.module', incremental_rebalance_default_callback),
+	ChrootPrefix = application:get_env(incremental_rebalance, 'zk.chroot.prefix',"zk"),
+	Chroot	= "/" ++ ChrootPrefix ++ "-" ++ atom_to_list(CallbackModule),
 	{ok, Pid} = erlzk:connect(ZkSvrList, 30000,[{monitor, self()}]),
 	link(Pid),
 	{Mega,Sec,Milli} = os:timestamp(),
 	AutoInstantId = lists:concat([integer_to_list(N) || N <- [Mega,Sec,Milli]]),
 	InstanceId = application:get_env(incremental_rebalance, 'group.instance.id', AutoInstantId),
 	error_logger:info_msg("Starting : ~p ~n", [InstanceId]),
-	{ok, #state{callback = Callback, zk_connection = Pid, zk_chroot = Chroot, zk_svr_list = ZkSvrList, instance_id = InstanceId}}.											
+	{ok, #state{callback = CallbackModule, zk_connection = Pid, zk_chroot = Chroot, zk_svr_list = ZkSvrList, instance_id = InstanceId}}.											
 	
 
 -spec handle_call(Request :: term(), From :: {pid(), Tag :: any()},
@@ -145,7 +145,7 @@ handle_info({node_data_changed, Znode},
 			%% Assign internal process
 		    {ok, NewCallbackState} = (State#state.callback):onResourceAssigned(DecodedData, DataChangedCallbackState);
 		_ ->
-			{ok, NewCallbackState} = {Action, DataChangedCallbackState}
+			{ok, NewCallbackState} = {ok, DataChangedCallbackState}
 	end,
 	erlzk:get_data(Pid, Znode, self()),
 	{ok, Children0} = erlzk:get_children(Pid, Chroot),
@@ -176,7 +176,7 @@ handle_info({node_data_changed, Znode},
 			%% Assign internal process
 		    {ok, NewCallbackState} = (State#state.callback):onResourceAssigned(DecodedData, DataChangedCallbackState);
 		_ ->
-			{ok, NewCallbackState} = {Action, DataChangedCallbackState}
+			{ok, NewCallbackState} = {ok, DataChangedCallbackState}
 	end,
 	erlzk:get_data(Pid, Znode, self()),
 	NewRvkCandidates = lists:keydelete(ZnodeSuffix, 2, RvkCandidates),
@@ -271,7 +271,7 @@ handle_info({node_data_changed, Znode},
 			%% Assign internal process
 		    {ok, NewCallbackState} = (State#state.callback):onResourceAssigned(DecodedData, DataChangedCallbackState);
 		_ ->
-			{ok, NewCallbackState} = {Action, DataChangedCallbackState}
+			{ok, NewCallbackState} = {ok, DataChangedCallbackState}
 	end,
 	erlzk:get_data(Pid, Znode, self()),
 	{noreply, State#state{callback_state = NewCallbackState}};

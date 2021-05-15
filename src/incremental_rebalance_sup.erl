@@ -30,9 +30,10 @@ init([]) ->
     SupFlags = #{strategy => one_for_all,
                  intensity => 0,
                  period => 1},
-    ChildSpecs = [{incremental_rebalance_svr,{gen_server, start_link,[{local,incremental_rebalance_svr},incremental_rebalance_svr,[],[]]},
+    CallbackModules = application:get_env(incremental_rebalance, 'callback.module.list', [incremental_rebalance_default_callback]),
+    ChildSpecs = [{incremental_rebalance_svr,{gen_server, start_link,[{local,incremental_rebalance_svr},incremental_rebalance_svr,[CallbackModule],[]]},
                     permanent, 10000, worker, [incremental_rebalance_svr]
-                }],
+                } || CallbackModule <- CallbackModules],
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions
