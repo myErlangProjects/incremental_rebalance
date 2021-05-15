@@ -15,7 +15,7 @@
 -define(LEADER, 'LEADER').		%% Leader and Coordinator
 -define(FOLLOWER, 'FOLLOWER').	%% Follower
 -define(RESOURCE_LIST,[{ocs1, [link11, link12, link13, link14, link15]},
-					{ocs2, [link21, link22, link23]}]).
+					{ocs2, [link21, link22, link23, link24, link25]}]).
 -record(state,{local_resource_list :: undefined | list(),
                 resource_list :: undefined | list(),
                 instance_id :: undefined | string(),
@@ -109,19 +109,19 @@ rebalance_round_robbin([], Nodes, OldNodes, Acc, _) ->
     lists:keysort(1,Nodes ++ OldNodes ++ Acc);
 
 rebalance_round_robbin([{_, []}|Resources], Nodes, OldNodes, Acc, PrevRRs) ->
-	rebalance_round_robbin(Resources, lists:keysort(1, Nodes ++ OldNodes ++ Acc), [], [], PrevRRs);
+	rebalance_round_robbin(Resources, Nodes ++ OldNodes ++ Acc, [], [], PrevRRs);
 
 rebalance_round_robbin([{G, [R|RL]}|Resources], [], [], Acc, PrevRRs) ->
-	rebalance_round_robbin([{G, [R|RL]}|Resources], lists:keysort(1, Acc), [], [], PrevRRs);
+	rebalance_round_robbin([{G, [R|RL]}|Resources], Acc, [], [], PrevRRs);
 
 rebalance_round_robbin([{G, [R|RL]}|Resources], [], [{N, Z, NRL}|Nodes], Acc, PrevRRs) ->
-	rebalance_round_robbin([{G, RL}|Resources], lists:keysort(1, Nodes), [],  Acc ++ [{N, Z, [{G, R}|NRL]}], PrevRRs);
+	rebalance_round_robbin([{G, RL}|Resources], Nodes, [],  Acc ++ [{N, Z, [{G, R}|NRL]}], PrevRRs);
 	
 rebalance_round_robbin([{G, [R|RL]}|Resources], [{N, Z, NRL}|Nodes], OldNodes, Acc, PrevRRs) ->
 	Exists = exists({G, R}, N, PrevRRs),
 	if
 		Exists ->
-			rebalance_round_robbin([{G, RL}|Resources], lists:keysort(1, Nodes ++ OldNodes), [], Acc ++ [{N, Z, [{G, R}|NRL]}], PrevRRs);
+			rebalance_round_robbin([{G, RL}|Resources], Nodes ++ OldNodes, [], Acc ++ [{N, Z, [{G, R}|NRL]}], PrevRRs);
 		true ->
 			rebalance_round_robbin([{G, [R|RL]}|Resources], Nodes, OldNodes ++ [{N, Z, NRL}], Acc, PrevRRs)
 	end.
