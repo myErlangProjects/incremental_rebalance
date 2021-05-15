@@ -12,8 +12,8 @@
 -export([rebalance/3]).
 -export([revokeCandidates/3, assignCandidates/3]).
 
--define(LEADER, l).		%% Leader and Coordinator
--define(FOLLOWER, f).	%% Follower
+-define(LEADER, 'LEADER').		%% Leader and Coordinator
+-define(FOLLOWER, 'FOLLOWER').	%% Follower
 -define(RESOURCE_LIST,[link1, link2, link3, link4, link5]).
 -record(state,{local_resource_list :: undefined | list(),
                 resource_list :: undefined | list(),
@@ -77,11 +77,13 @@ updateRole(?FOLLOWER, #state{instance_id = InstanceId} = State) ->
 onResourceRevoked([{'group.instance.id', InstanceId},{'instance.data', NData}], #state{role = ?LEADER} = State) ->
     error_logger:info_msg("onResourceRevoked : ~p~n", [[{'group.instance.id', InstanceId},{'instance.data', NData}]]),
     error_logger:info_msg("[~p] LEADER RESOURCES : ~p~n", [InstanceId, NData]),
+    receive after 100 -> ok end,
     {ok, State#state{local_resource_list = NData}};
 
 onResourceRevoked([{'group.instance.id', InstanceId},{'instance.data', NData}], #state{role = ?FOLLOWER} = State) ->
     error_logger:info_msg("onResourceRevoked : ~p~n", [[{'group.instance.id', InstanceId},{'instance.data', NData}]]),
     error_logger:info_msg("[~p] FOLLOWER RESOURCES : ~p~n", [InstanceId, NData]),
+    receive after 100 -> ok end,
     {ok, State#state{local_resource_list = NData}}.
 
 onResourceAssigned([{'group.instance.id', InstanceId},{'instance.data', NData}], #state{role = ?LEADER} = State) ->

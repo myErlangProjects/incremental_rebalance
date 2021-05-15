@@ -38,6 +38,7 @@
 -define(CONN_WAIT_T_MS, 1000).
 -define(RECON_WAIT_T_MS, 1000).
 -define(REPEAT_REBAL_T_MS, 10000).
+-define(REBAL_REVOKE_TIMEOUT_T_MS, 20000).
 -define(INIT_REBAL_T_MS, application:get_env(incremental_rebalance, 'scheduled.rebalance.max.delay.ms', 20000)).
 %%----------------------------------------------------------------------
 %%  The incremental_rebalance_svr gen_server callbacks
@@ -53,7 +54,6 @@
 %%
 init([CallbackModule]) ->
 	process_flag(trap_exit, true),
-	erlzk:start(),
 	ZkHostPortList = application:get_env(incremental_rebalance, 'zk.server.list',"127.0.0.1:2181"),
 	ZkSvrList = [{H, list_to_integer(P)}|| [H,P] <- [string:tokens(ZkHostPort, ": ") || ZkHostPort <- string:tokens(ZkHostPortList, ", ")]],
 	ChrootPrefix = application:get_env(incremental_rebalance, 'zk.chroot.prefix',"zk"),
@@ -140,7 +140,8 @@ handle_info({node_data_changed, Znode},
 		revoke ->
 			%% Revoke internal process
 			{ok, NewCallbackState} = (State#state.callback):onResourceRevoked(DecodedData, DataChangedCallbackState),
-			erlzk:set_data(Pid, binary_to_list(Znode), Data, -1);	%% redundant set_data to inform leader that revoke is done.
+			Status = erlzk:set_data(Pid, binary_to_list(Znode), Data, -1),	%% redundant set_data to inform leader that revoke is done.
+			error_logger:info_msg("Znode : ~p set_data : ~p~n",[Znode, Status]);
 		assign ->
 			%% Assign internal process
 		    {ok, NewCallbackState} = (State#state.callback):onResourceAssigned(DecodedData, DataChangedCallbackState);
@@ -205,7 +206,7 @@ handle_info({node_data_changed, Znode},
 		true ->
 			NewState = State#state{zk_revoke_candidates = NewRvkCandidates, zk_assign_candidates = AsgCandidates, 
 						callback_state = NewCallbackState},
-			{noreply, NewState}
+			{noreply, NewState, ?REBAL_REVOKE_TIMEOUT_T_MS}
 	end;
 handle_info({node_data_changed, FZnode}, 
 	#state{zk_chroot = Chroot, zk_znode = Znode, zk_znode_suffix = ZnodeSuffix,
@@ -240,7 +241,7 @@ handle_info({node_data_changed, FZnode},
 			end;
 		true ->
 			NewState = State#state{zk_revoke_candidates = NewRvkCandidates, zk_assign_candidates = AsgCandidates},
-			{noreply, NewState}
+			{noreply, NewState, ?REBAL_REVOKE_TIMEOUT_T_MS}
 	end;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%	
@@ -266,7 +267,8 @@ handle_info({node_data_changed, Znode},
 		revoke ->
 			%% Revoke internal process
 			{ok, NewCallbackState} = (State#state.callback):onResourceRevoked(DecodedData, DataChangedCallbackState),
-			erlzk:set_data(Pid, binary_to_list(Znode), Data, -1);	%% redundant set_data to inform leader that revoke is done.
+			Status = erlzk:set_data(Pid, binary_to_list(Znode), Data, -1),	%% redundant set_data to inform leader that revoke is done.
+			error_logger:info_msg("Znode : ~p set_data : ~p~n",[Znode, Status]);
 		assign ->
 			%% Assign internal process
 		    {ok, NewCallbackState} = (State#state.callback):onResourceAssigned(DecodedData, DataChangedCallbackState);
@@ -341,7 +343,7 @@ code_change(_OldVsn, State, _Extra) ->
 initiate_session(#state{zk_connection = Pid, zk_chroot = Chroot, instance_id = InstanceId, callback = Callback} = State) ->
 	ZnodeName = application:get_env(incremental_rebalance, 'zk.znode',"resource"),
 	erlzk:create(Pid, Chroot, persistent),
-
+	error_logger:info_msg("Chroot : ~p~n" ,[Chroot]),
 	{ok, InitialData, CallbackState} = (Callback):init(InstanceId),
 	InitialZnodeData = [{'group.instance.id', InstanceId},{'instance.data', InitialData}],
 	{ok, Znode} = erlzk:create(Pid, Chroot ++ "/" ++ ZnodeName, term_to_binary(InitialZnodeData), ephemeral_sequential),
@@ -415,7 +417,8 @@ proceed_to_rebalance(ZnodeSuffix, State)->
 				end
 			|| {I, Z, D} <- RvkCandidates],
 			% erlzk:exists(State#state.zk_connection, State#state.zk_znode, self()),
-			{noreply,  NewState#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = RvkCandidates, zk_assign_candidates = AsgCandidates}}
+			{noreply,  NewState#state{zk_adj_leader = undefined, role = ?LEADER, zk_revoke_candidates = RvkCandidates, 
+				zk_assign_candidates = AsgCandidates}, ?REBAL_REVOKE_TIMEOUT_T_MS}
 	end.
 
 %%----------------------------------------------------------------------

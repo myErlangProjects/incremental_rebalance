@@ -70,6 +70,7 @@ spec:
               key: ERLANG_COOKIE
         - name: WORLD_LIST
           value: "[]"
+          
         - name: ZK_LIST
           value: '"zk-cs.default.svc.cluster.local:2181"'
         - name: ZK_CHROOT_PREFIX
@@ -81,5 +82,5 @@ spec:
         - name: REBALANCE_MAX_DELAY_MS
           value: '10000'
         - name: CALLBACK_MODULE_LIST
-          value: '["incremental_rebalance_default_callback"]'
+          value: "[incremental_rebalance_default_callback]"
       restartPolicy: Always
