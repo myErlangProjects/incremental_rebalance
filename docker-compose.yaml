@@ -35,7 +35,7 @@ services:
            - ZK_CHROOT_PREFIX="zk"
            - ZK_ZNODE="links"
            - INSTANT_ID="erlang.k8s.node-1"
-           - CALLBACK_MODULE_LIST=['incremental_rebalance_default_callback']
+           - CALLBACK_MODULE_LIST=['incremental_rebalance_default_callback_1']
            - REBALANCE_MAX_DELAY_MS=20000 
 
     erlang.k8s.node-2:
@@ -54,5 +54,5 @@ services:
            - ZK_CHROOT_PREFIX="zk"
            - ZK_ZNODE="links"
            - INSTANT_ID= "erlang.k8s.node-2"
-           - CALLBACK_MODULE_LIST=['incremental_rebalance_default_callback']
+           - CALLBACK_MODULE_LIST=['incremental_rebalance_default_callback_1']
            - REBALANCE_MAX_DELAY_MS=20000 

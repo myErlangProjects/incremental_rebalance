@@ -82,5 +82,5 @@ spec:
         - name: REBALANCE_MAX_DELAY_MS
           value: '10000'
         - name: CALLBACK_MODULE_LIST
-          value: "[incremental_rebalance_default_callback]"
+          value: "[incremental_rebalance_default_callback_1]"
       restartPolicy: Always
