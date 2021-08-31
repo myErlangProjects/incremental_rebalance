@@ -8,8 +8,7 @@
    stdlib, 
    sasl,
    erlzk,
-   erlang_k8s_cluster,
-   incremental_rebalance
+   erlang_k8s_cluster
    ]},
   {env,[]},
   {modules, [incremental_rebalance_app,
