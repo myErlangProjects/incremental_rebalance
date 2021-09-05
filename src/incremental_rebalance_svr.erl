@@ -350,7 +350,7 @@ initiate_session(#state{zk_connection = Pid, zk_chroot = Chroot, instance_id = I
 	{ok, _} = erlzk:exists(Pid, Znode, self()),
 	[_, ZnodeSuffix] = string:tokens(Znode, "/"),
 	{ok, Children} = erlzk:get_children(Pid, Chroot),
-	error_logger:info_msg("Create ephemeral_sequential : ZnodeSuffix : ~p , Children : ~p~n", [Children, ZnodeSuffix]),
+	error_logger:info_msg("Create ephemeral_sequential : ZnodeSuffix : ~p , Children : ~p~n", [ZnodeSuffix, Children]),
 	NewState = leader_election(State#state{zk_connection = Pid, zk_znode = list_to_binary(Znode), zk_znode_suffix = ZnodeSuffix,
 	zk_revoke_candidates = [], zk_assign_candidates = [], callback_state = CallbackState, zk_chroot_children = lists:sort(Children)}),
 	{ok, NewCallbackState} = (State#state.callback):updateRole(NewState#state.role, CallbackState),
