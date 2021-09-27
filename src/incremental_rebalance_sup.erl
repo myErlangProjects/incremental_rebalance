@@ -31,7 +31,8 @@ init([]) ->
                  intensity => 0,
                  period => 1},
     CallbackModules = application:get_env(incremental_rebalance, 'callback.module.list', [incremental_rebalance_default_callback]),
-    ChildSpecs = [{incremental_rebalance_svr,{gen_server, start_link,[{local,incremental_rebalance_svr},incremental_rebalance_svr,[CallbackModule],[]]},
+    ZkHostPortList = application:get_env(incremental_rebalance, 'zk.server.list',undefined),
+    ChildSpecs = [{incremental_rebalance_svr,{gen_server, start_link,[{local,incremental_rebalance_svr},incremental_rebalance_svr,[CallbackModule, ZkHostPortList],[]]},
                     permanent, 10000, worker, [incremental_rebalance_svr]
                 } || CallbackModule <- CallbackModules],
     {ok, {SupFlags, ChildSpecs}}.
