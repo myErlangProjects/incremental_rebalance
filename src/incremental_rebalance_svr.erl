@@ -52,9 +52,8 @@
 %% @see //stdlib/gen_server:init/1
 %% @private
 %%
-init([CallbackModule]) ->
+init([CallbackModule, ZkHostPortList]) when is_list(ZkHostPortList) ->
 	process_flag(trap_exit, true),
-	ZkHostPortList = application:get_env(incremental_rebalance, 'zk.server.list',"127.0.0.1:2181"),
 	ZkSvrList = [{H, list_to_integer(P)}|| [H,P] <- [string:tokens(ZkHostPort, ": ") || ZkHostPort <- string:tokens(ZkHostPortList, ", ")]],
 	ChrootPrefix = application:get_env(incremental_rebalance, 'zk.chroot.prefix',"zk"),
 	Chroot	= "/" ++ ChrootPrefix ++ "-" ++ atom_to_list(CallbackModule),
@@ -63,9 +62,18 @@ init([CallbackModule]) ->
 	{Mega,Sec,Milli} = os:timestamp(),
 	AutoInstantId = lists:concat([integer_to_list(N) || N <- [Mega,Sec,Milli]]),
 	InstanceId = application:get_env(incremental_rebalance, 'group.instance.id', AutoInstantId),
-	error_logger:info_msg("Starting : ~p ~n", [InstanceId]),
-	{ok, #state{callback = CallbackModule, zk_connection = Pid, zk_chroot = Chroot, zk_svr_list = ZkSvrList, instance_id = InstanceId}}.											
-	
+	error_logger:info_msg("Starting : ~p with group coordinator ~n", [InstanceId]),
+	{ok, #state{callback = CallbackModule, zk_connection = Pid, zk_chroot = Chroot, zk_svr_list = ZkSvrList, instance_id = InstanceId}};											
+
+init([CallbackModule, _]) ->
+	process_flag(trap_exit, true),
+	{Mega,Sec,Milli} = os:timestamp(),
+	AutoInstantId = lists:concat([integer_to_list(N) || N <- [Mega,Sec,Milli]]),
+	InstanceId = application:get_env(incremental_rebalance, 'group.instance.id', AutoInstantId),
+	error_logger:info_msg("Starting : ~p without group coordinator ~n", [InstanceId]),
+	NewState = initiate_session(#state{callback = CallbackModule, zk_connection = undefined, zk_chroot = undefined, zk_svr_list = undefined, instance_id = InstanceId}),
+	{ok, NewState, ?CONN_WAIT_T_MS}.											
+
 
 -spec handle_call(Request :: term(), From :: {pid(), Tag :: any()},
 		State :: #state{}) ->
@@ -109,6 +117,13 @@ handle_cast(_Request, State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%	
 %% LEADER messages
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% without zookeeper
+handle_info(timeout, 			
+		#state{zk_connection = undefined,zk_znode = Znode,
+			zk_znode_suffix = ZnodeSuffix, instance_id = InstanceId, role = ?LEADER} = State) ->
+	error_logger:info_msg("[~p] LEADER : proceed_to_rebalance : ~p ~n", [InstanceId, Znode]),
+	proceed_to_rebalance(ZnodeSuffix, State);
+
 handle_info(timeout, 
 		#state{zk_connection = Pid,zk_znode = Znode,zk_chroot = Chroot, 
 			zk_znode_suffix = ZnodeSuffix, instance_id = InstanceId, role = ?LEADER} = State) ->
@@ -321,6 +336,9 @@ handle_info(Info, #state{zk_znode = Znode, instance_id = InstanceId, zk_connecti
 %% @see //stdlib/gen_server:terminate/3
 %% @private
 %%
+terminate(Reason, #state{zk_connection = undefined, instance_id = InstanceId}=State) ->
+	error_logger:warning_msg("Terminating : ~p | Reason : ~p | State : ~p~n", [InstanceId, Reason, State]),
+	ok;
 terminate(Reason, #state{zk_connection = Pid, instance_id = InstanceId, zk_znode = Znode}=State) ->
 	erlzk:delete(Pid, Znode),
 	erlzk:close(Pid),
@@ -340,6 +358,14 @@ code_change(_OldVsn, State, _Extra) ->
 %%----------------------------------------------------------------------
 %%  internal functions
 %%----------------------------------------------------------------------
+%% without zookeeper
+initiate_session(#state{zk_connection = undefined, instance_id = InstanceId, callback = Callback} = State) ->
+	Znode = application:get_env(incremental_rebalance, 'zk.znode',"resource"),
+	{ok, _InitialData, CallbackState} = (Callback):init(InstanceId),
+	NewState = State#state{role = ?LEADER, zk_znode = list_to_binary(Znode)},
+	{ok, NewCallbackState} = (State#state.callback):updateRole(NewState#state.role, CallbackState),
+	NewState#state{callback_state = NewCallbackState};
+
 initiate_session(#state{zk_connection = Pid, zk_chroot = Chroot, instance_id = InstanceId, callback = Callback} = State) ->
 	ZnodeName = application:get_env(incremental_rebalance, 'zk.znode',"resource"),
 	erlzk:create(Pid, Chroot, persistent),
@@ -374,6 +400,28 @@ monitor_adjacent_leader(AdjLeaderSuffix, #state{role = ?FOLLOWER, zk_chroot = Ch
 monitor_adjacent_leader(undefined, #state{role = ?LEADER}= State) ->
 	State#state{zk_adj_leader = undefined, zk_revoke_candidates = [], zk_assign_candidates = []}.
 		
+%% without zookeeper
+proceed_to_rebalance(_, #state{zk_connection = undefined,instance_id = I, zk_znode = Z, callback_state = CallbackState} = State)->
+	PrevRRs = [{I, Z, []}],
+	{ok, NewState, NewRRs} = rebalance(State, PrevRRs),
+	RvkCandidates = (NewState#state.callback):revokeCandidates(lists:keysort(1,NewRRs), lists:keysort(1,PrevRRs), []),
+	AsgCandidates = (NewState#state.callback):assignCandidates(lists:keysort(1,NewRRs), lists:keysort(1,PrevRRs), []),
+	error_logger:info_msg("NewRRs : ~p~n PrevRRs : ~p~n RvkCandidates : ~p~n AsgCandidates : ~p~n",[NewRRs, PrevRRs, RvkCandidates, AsgCandidates]),
+	case RvkCandidates of
+		[{I, Z, RvkD}] ->
+			{ok, RvkCallbackState} = (State#state.callback):onResourceRevoked([{'group.instance.id', I},{'instance.data', RvkD}], CallbackState);
+		[] ->
+			{ok, RvkCallbackState} = {ok, CallbackState}
+	end,
+	case AsgCandidates of
+		[{I, Z, AsgD}] ->
+			{ok, NewCallbackState} = (State#state.callback):onResourceAssigned([{'group.instance.id', I},{'instance.data', AsgD}], RvkCallbackState);
+		[] ->
+			{ok, NewCallbackState} = {ok, RvkCallbackState}
+	end,
+	UpdatedState = State#state{callback_state = NewCallbackState},
+	{noreply, UpdatedState};
+
 
 proceed_to_rebalance(ZnodeSuffix, State)->
 	ZNodes = State#state.zk_chroot_children,
