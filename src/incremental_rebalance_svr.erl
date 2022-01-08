@@ -339,6 +339,10 @@ handle_info(Info, #state{zk_znode = Znode, instance_id = InstanceId, zk_connecti
 terminate(Reason, #state{zk_connection = undefined, instance_id = InstanceId}=State) ->
 	error_logger:warning_msg("Terminating : ~p | Reason : ~p | State : ~p~n", [InstanceId, Reason, State]),
 	ok;
+terminate(Reason, #state{zk_connection = Pid, instance_id = InstanceId, zk_znode = undefined}=State) ->
+	erlzk:close(Pid),
+	error_logger:warning_msg("Terminating : ~p | Reason : ~p | State : ~p~n", [InstanceId, Reason, State]),
+	ok;
 terminate(Reason, #state{zk_connection = Pid, instance_id = InstanceId, zk_znode = Znode}=State) ->
 	erlzk:delete(Pid, Znode),
 	erlzk:close(Pid),
